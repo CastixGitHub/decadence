@@ -16,20 +16,22 @@ Gentoo masked cadence...
  Ok got to read those bugs, it's more complicated than it looked like from a community point of view
 
 
- Ouch, QUOTING from https://github.com/falkTX/ README.md
+Ouch, QUOTING from https://github.com/falkTX/ README.md
  """
-Over time Cadence small parts have moved into other projects:
+        Over time Cadence small parts have moved into other projects:
 
-    patchbay canvas code was integrated in Carla, where it received many updates
-    Carla's canvas was branched off into RaySession, which uses the same code as base but with its own style (external project, not my own)
-    pyjacklib became its own project (external project I am helping maintain)
-    qjackcapture from the jack render tool (another external project)
-    bigmeter and xycontrollers were added as internal plugins in Carla
-    wineasio settings panel
+            patchbay canvas code was integrated in Carla, where it received many updates
+            Carla's canvas was branched off into RaySession, which uses the same code as base but with its own style (external project, not my own)
+            pyjacklib became its own project (external project I am helping maintain)
+            qjackcapture from the jack render tool (another external project)
+            bigmeter and xycontrollers were added as internal plugins in Carla
+            wineasio settings panel
 
-The only big remaining part to still be split off is the jack2/jackdbus settings tool and then Cadence can really die as a project.
+        The only big remaining part to still be split off is the jack2/jackdbus settings tool and then Cadence can really die as a project.
  """
- This means this little toy of mine will be the only one? okay...
+
+This means this little toy of mine will be the only one? okay...
+ Why did I go with pyglet instead of pygobject then? mehhh
 
 I'd like the CV stuff to also work (maybe that's not a thing for pipewire? idk)
 also, didn't yet check how the CV have been implemented in jack2 since
