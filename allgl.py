@@ -79,14 +79,14 @@ uniform float time;
 in vec3 vertex_color;
 void main()
 {
-    gl_FragColor = vec4(vertex_color, 1.0);//vec4(1., 0., 0., 1.);//vec4(abs(sin(time)), 1., 1., 1.0);
+    gl_FragColor = vec4(vertex_color, 1.0);
 }
     """
 
     geometry_source_on = """
 #version 330 core
 layout (points) in;
-layout (points, max_vertices=200) out;
+layout (triangle_strip, max_vertices=5) out;
 
 uniform WindowBlock
 {
@@ -96,15 +96,22 @@ uniform WindowBlock
 
 in float geosize[];
 
+out vec3 vertex_color;
+
+void emit_offset(float x, float y, vec3 color) {
+    gl_Position = gl_in[0].gl_Position
+        + window.projection * vec4(x, y, .0, .0)
+        - window.projection * vec4(geosize[0] / 4, geosize[0] / 4, .0, .0);
+    vertex_color = color;
+    EmitVertex();
+}
 void main() {
-    vec4 pos = gl_in[0].gl_Position;
-    for (int i = 5; i < geosize[0] - 5; i++) {
-        for (int j = 5; j < geosize[0] - 5; j++) {
-            gl_Position = pos + window.projection *
-                vec4(pos.x - geosize[0]/2 + i, pos.y - geosize[0]/2 + j, 0., 0.);
-            EmitVertex();
-        }
-    }
+    float mysize = geosize[0] / 2;
+    emit_offset(mysize, 0., vec3(0., 1., 0.));
+    emit_offset(mysize, mysize, vec3(0., 1., 0.));
+    emit_offset(0, mysize, vec3(0., 0., 1.));
+    emit_offset(0, 0, vec3(1., 0., 0.));
+    emit_offset(mysize, 0, vec3(0., 1., 0.));
     EndPrimitive();
 }
     """
@@ -113,9 +120,10 @@ void main() {
 #version 330 core
 
 in vec2 center;
+in vec3 vertex_color;
 void main()
 {
-    gl_FragColor = vec4(1., 1., 0., 1.);
+    gl_FragColor = vec4(vertex_color, 1.);
 }
     """
 
@@ -171,7 +179,7 @@ square_button = SquareButton()
 square_button.add(20., 25., 20., False)
 square_button.add(50., 50., 20., True)
 square_button.add(200., 200., 20., False)
-square_button.add(100., 125., 30., True)
+square_button.add(100., 125., 180., True)
 batch = pyglet.graphics.Batch()
 square_button.compile(batch)
 
