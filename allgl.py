@@ -4,11 +4,6 @@ from pyglet.window import Window
 from pyglet.text import Label
 from pyglet.graphics.shader import Shader, ShaderProgram
 
-pyglet.options['debug_gl'] = True
-pyglet.options['debug_gl_trace'] = True
-pyglet.options['debug_gl_trace_args'] = True
-pyglet.options['debug_glsl'] = True
-
 window = pyglet.window.Window(caption='decadence', width=600, height=400)
 #wel = pyglet.window.event.WindowEventLogger()
 #window.push_handlers(wel)
@@ -86,7 +81,7 @@ void main()
     geometry_source_on = """
 #version 330 core
 layout (points) in;
-layout (triangle_strip, max_vertices=5) out;
+layout (triangle_fan, max_vertices=5) out;
 
 uniform WindowBlock
 {
@@ -95,22 +90,21 @@ uniform WindowBlock
 } window;
 
 in float geosize[];
+float mysize = geosize[0] / 2;
 
 out vec3 vertex_color;
 
 void emit_offset(float x, float y, vec3 color) {
     gl_Position = gl_in[0].gl_Position
-        + window.projection * vec4(x, y, .0, .0)
-        - window.projection * vec4(geosize[0] / 4, geosize[0] / 4, .0, .0);
+        + window.projection * vec4(x - mysize/2, y - mysize/2, .0, .0)
     vertex_color = color;
     EmitVertex();
 }
 void main() {
-    float mysize = geosize[0] / 2;
+    emit_offset(0, 0, vec3(0.));  // center fan
     emit_offset(mysize, 0., vec3(0., 1., 0.));
     emit_offset(mysize, mysize, vec3(0., 1., 0.));
     emit_offset(0, mysize, vec3(0., 0., 1.));
-    emit_offset(0, 0, vec3(1., 0., 0.));
     emit_offset(mysize, 0, vec3(0., 1., 0.));
     EndPrimitive();
 }
