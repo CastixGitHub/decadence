@@ -44,3 +44,14 @@ There's one mention about CV through metadata
 I'm not sure if helvum or some other pipewire-specific supports it
 I guess the way to go is carla even on pipewire.
 (I need to package carla for gentoo then)
+
+User Guide
+----------
+
+When to kill? When as a developer you modified jack, stop/start won't reload your changes
+
+When to Switch Master? I don't know…
+
+When to Reset Xruns? when you want to, helps keeping an eye on your load and latency
+
+Cadence now shows clock sources disabled… That's expected and fine (if that somehow broke something for you, reset from cadence). Cadence clock selection is for jack2<1.9.10 (~2014)
