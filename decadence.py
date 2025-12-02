@@ -1,8 +1,8 @@
-# TODO: a2j
+# TODO: manage a2j pulse2j etc
 import pyglet
 from pyglet.window import Window
 from pyglet.text import Label
-from pyglet.gui import Frame, PushButton, ToggleButton
+from pyglet.gui import Frame, PushButton, ToggleButton, TextEntry
 from pyglet.image import ImageData
 from functools import partial
 from sys import stderr
@@ -20,7 +20,7 @@ def dbus_reconnect():
         "org.jackaudio.service",
         "/org/jackaudio/Controller"
     )
-    patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
+    #patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
     jackcfg = dbus.Interface(d_jack, "org.jackaudio.Configure")
 dbus_reconnect()
 
@@ -28,6 +28,9 @@ dbus_reconnect()
 window = pyglet.window.Window(caption='decadence', width=600, height=400)
 # i3wm users: $mod+Shift+space to toggle floating to tiling
 #   autostarts with floating, not worth to change that
+
+#wel = pyglet.window.event.WindowEventLogger()
+#window.push_handlers(wel)
 
 def error_dialog(msg, title='Error'):
     w = Window(
@@ -67,6 +70,10 @@ def cfg_btn_x(i, offset=0): return offset + 15
 def cfg_btn_y(i, offset=window.height - 75): return offset - 20 * i - 2 * i
 def cfg_btnl_x(i, offset=0): return offset + 15 + 20 + 2
 def cfg_btnl_y(i, offset=window.height - 75): return offset - 20 * i - 2 * i + 4
+def cfg_int_x(_): return window.width - 15 - 50
+def cfg_int_y(i): return window.height - 50 - 30 * i
+def cfg_intl_x(_): return window.width - 15 - 50 - 5
+def cfg_intl_y(i): return window.height - 50 - 30 * i - 2 * i + 10
 def cfg_action_x(i): return 10 + btn_w * i + 5 * i
 def cfg_action_y(): return 10
 
@@ -116,11 +123,76 @@ img_sinbtn_hover = ImageData(
 )
 
 
-configure_frame = Frame(window, enable=False)
+# mhhh, a pyglet bug, https://github.com/pyglet/pyglet/blob/f93b602ea3dde726c6661aa8aaf7400d132f445a/pyglet/gui/widgets.py#L268
+#breakpoint()
+from inspect import getsource
+for evt_name in ('on_mouse_leave', 'on_mouse_release'):
+    _source = getsource(getattr(PushButton, evt_name))
+    _source = '\n'.join(line[4:] for line in _source.replace(
+        "self.dispatch_event('on_release')",
+        "self.dispatch_event('on_release', self)",
+        # wrong event? missing self?  # just missing self!
+    ).replace(
+        # did they ever run this?
+        "if not self.enabled or not self._pressed",
+        "if not self.enabled and not self._pressed",
+    ).split('\n'))
+    print('Needed to execute this:', file=stderr)
+    print(_source, file=stderr)
+    exec(_source, (_glo := {}), (_loc := {}))
+    setattr(PushButton, evt_name, _loc[evt_name])
+
+class Navigation:  # just frame (event) handling
+    # ooooo, WidgetBase has enabled
+    #         and Frame has enable
+    class FakeFrame:  # Frame doesn't work with TextEntry
+        def __init__(self, window, enable=False):
+            self.window = window
+            self.widgets = set()
+            self._enable = enable
+        def add_widget(self, widget):
+            self.widgets.add(widget)
+            if self._enable:
+                for widget in self.widgets:
+                    self.window.remove_handlers(widget)
+                    self.window.push_handlers(widget)
+        @property
+        def enable(self):
+            return self._enable
+        @enable.setter
+        def enable(self, enabled):
+            self._enable = enabled
+            for widget in self.widgets:
+                if enabled:
+                    self.window.remove_handlers(widget)
+                    self.window.push_handlers(widget)
+                else:
+                    self.window.remove_handlers(widget)
+    def __init__(self, window):
+        # pyglet.gui.frame.Frame is WIP
+        self.main_frame = Frame(window, enable=True)
+        self.configure_frame = self.FakeFrame(window, enable=False)
+        self.to_main()
+
+    # TODO: pyglet bug: I have to push/pop event handlers, setting enable should do it
+    def to_main(self):
+        self.name = 'main'
+        self.main_frame.enable = True
+        window.push_handlers(self.main_frame)
+        self.configure_frame.enable = False
+
+    def to_engine(self):
+        self.name = 'engine'
+        self.main_frame.enable = False
+        window.remove_handlers(self.main_frame)
+        self.configure_frame.enable = 'engine'
+
+navigation = Navigation(window)
+
 class SinButtons:  # RadioButtonGroup
     def __init__(self, batch):
         self._sin = []
-        self.frame = configure_frame
+        self.frame = navigation.configure_frame
         self.batch = batch
         self.modified = False
     def __iadd__(self, obj):#btn: ToggleButton, label: Label):
@@ -132,7 +204,8 @@ class SinButtons:  # RadioButtonGroup
         # btn.batch = self.batch  # unavailable
         # label.batch = self.batch  # kinda works but
         return self
-    def on_toggle(self, btn: ToggleButton, value: bool):
+    def on_toggle(self, btn: ToggleButton, value):
+        #print('toggle', self, value)
         if value is not None:
             self.modified = True
         for _btn, _ in self._sin:
@@ -153,8 +226,6 @@ class SinButtons:  # RadioButtonGroup
                 self.on_toggle(_btn, None)
                 return
 
-# app state
-is_configuring = False
 
 # drawing disorder and order
 batch_status = pyglet.graphics.Batch()
@@ -392,19 +463,14 @@ def on_press(widget):
 
 @configure_status_btn.event
 def on_press(_):
-    global is_configuring
-    is_configuring = 'engine'
-    configure_frame.enabled = True
-    print('is configuring now...')
+    navigation.to_engine()
 
-window.push_handlers(start_status_btn)
-window.push_handlers(stop_status_btn)
-window.push_handlers(force_restart_status_btn)
-window.push_handlers(reset_xruns_status_btn)
-window.push_handlers(switch_master_status_btn)
-window.push_handlers(configure_status_btn)
-window.push_handlers(configure_frame)
-
+navigation.main_frame.add_widget(start_status_btn)
+navigation.main_frame.add_widget(stop_status_btn)
+navigation.main_frame.add_widget(force_restart_status_btn)
+navigation.main_frame.add_widget(reset_xruns_status_btn)
+navigation.main_frame.add_widget(switch_master_status_btn)
+navigation.main_frame.add_widget(configure_status_btn)
 
 def get_info():  # through dbus
     try:
@@ -473,7 +539,8 @@ for feat_name, feat in engine_features.items():
     is_set, default, value = feat['getter']()
     feat['default'] = default
     feat['is_bool'] = isinstance(value, dbus.Boolean)
-    feat['is_int'] = isinstance(value, dbus.UInt32)
+    feat['is_uint32'] = isinstance(value, dbus.UInt32)
+    feat['is_int32'] = isinstance(value, dbus.Int32)
 cfg_toggles_batch = pyglet.graphics.Batch()
 cfg_toggles = {}
 i = 0
@@ -485,6 +552,7 @@ you_need_to_keep_a_ref_to_labels_somewhere = Label(
 ),
 def on_toggle_engine_bool(btn: ToggleButton, value: bool):
     btn.modified = True
+
 relabeling = {
     'sync': 'Server Syncronous Mode',
     'replace-registry': 'Replace Shared Memory Registry',
@@ -507,7 +575,7 @@ for feat_name, feat in engine_features.items():
                 batch=cfg_toggles_batch,
             ),
         }
-        configure_frame.add_widget(btn)
+        navigation.configure_frame.add_widget(btn)
         btn.modified = False
         btn.feat_name = feat_name
         btn.set_handler('on_toggle', on_toggle_engine_bool)
@@ -583,6 +651,34 @@ for i, kv in enumerate(self_connect_modes):
         {'value': val},
     )
 
+cfg_integers_batch = pyglet.graphics.Batch()
+i = 0
+cfg_integers = {}
+for feat_name, feat in engine_features.items():
+    if (feat['is_uint32'] or feat['is_int32']) and feat_name != 'clock-source':
+        i += 1
+        cfg_integers[feat_name] = {
+            'text_entry': (te := TextEntry(
+                str(int(feat['getter']()[2])),
+                x=cfg_int_x(i), y=cfg_int_y(i),
+                width=50,
+                color=(0xcc, 0xcc, 0xcc, 0xff),
+                text_color=(0x00, 0x00, 0x00, 0xff),
+                caret_color=(0x00, 0x00, 0x00, 0xff),
+                batch=cfg_integers_batch,
+            )),
+            'label': Label(
+                feat_name.replace('-', ' ').capitalize()
+                if feat_name != 'client-timeout'
+                else 'Client timeout (ms)',
+                x=cfg_intl_x(i), y=cfg_intl_y(i), anchor_x='right',
+                font_name='monospace',
+                batch=cfg_integers_batch,
+            ),
+        }
+        te.modified = False
+        navigation.configure_frame.add_widget(te)
+
 cfg_actions_batch = pyglet.graphics.Batch()
 cancel_btn = PushButton(
     x=cfg_action_x(0), y=cfg_action_y(),
@@ -597,7 +693,7 @@ cancel_btn._label = Label(
     font_name='monospace',
     batch=cfg_actions_batch, group=GRP1,
 )
-configure_frame.add_widget(cancel_btn)
+navigation.configure_frame.add_widget(cancel_btn)
 reset_btn = PushButton(
     x=cfg_action_x(1), y=cfg_action_y(),
     pressed=img_btn_pressed,
@@ -611,7 +707,7 @@ reset_btn._label = Label(
     font_name='monospace',
     batch=cfg_actions_batch, group=GRP1,
 )
-configure_frame.add_widget(reset_btn)
+navigation.configure_frame.add_widget(reset_btn)
 save_btn = PushButton(
     x=cfg_action_x(2), y=cfg_action_y(),
     pressed=img_btn_pressed,
@@ -625,7 +721,7 @@ save_btn._label = Label(
     font_name='monospace',
     batch=cfg_actions_batch, group=GRP1,
 )
-configure_frame.add_widget(save_btn)
+navigation.configure_frame.add_widget(save_btn)
 
 def update_engine_gui_state_clock_selection():
     # we receive 0 1 2 instead of c h s
@@ -674,6 +770,12 @@ def update_engine_gui_booleans():
             btn._pressed = actual
             btn._sprite.image = btn._pressed_img if actual else btn._unpressed_img
 
+def update_engine_gui_integers():
+    #return
+    for feat_name, thing in cfg_integers.items():
+        if not thing['text_entry'].modified and not thing['text_entry'].focus:
+            thing['text_entry'].value = str(int(engine_features[feat_name]['getter']()[2]))
+
 def update_engine_gui_state():
     # we poll dbus and update the GUI unless modified
     # modifying doesn't immediatly set the value on dbus
@@ -683,6 +785,7 @@ def update_engine_gui_state():
     update_engine_gui_state_clock_selection()
     update_engine_gui_self_connect_mode()
     update_engine_gui_booleans()
+    update_engine_gui_integers()
 
 def draw():
     window.clear()
@@ -695,16 +798,18 @@ def draw_configure():
     cfg_sin_clock_source.draw()
     cfg_toggles_batch.draw()
     cfg_sin_self_connect_mode.draw()
+    cfg_integers_batch.draw()
     cfg_actions_batch.draw()
 
 @window.event
 def on_draw():
-    if is_configuring:
-        update_engine_gui_state()
-        draw_configure()
-    else:
-        get_info()
-        draw()
+    match navigation.name:
+        case 'main':
+            get_info()
+            draw()
+        case 'engine':
+            update_engine_gui_state()
+            draw_configure()
 
 def on_dbus_error(msg):
     print(msg, file=stderr)
@@ -714,19 +819,17 @@ def on_dbus_error(msg):
 
 @cancel_btn.event
 def on_press(btn, *args):
-    global is_configuring
-    is_configuring = False
+    navigation.to_main()
 @reset_btn.event
 def on_press(btn, *args):
-    global is_configuring
     engine_features['clock-source']['retter']()
     engine_features['self-connect-mode']['retter']()
     for feat_name, thing in cfg_toggles.items():
         engine_features[feat_name]['retter']()
-    is_configuring = False
+    # TODO: forget about all the .modified on reset
+    navigation.to_main()
 @save_btn.event
 def on_press(btn, *args):
-    global is_configuring
     if cfg_sin_clock_source.modified:
         try:
             engine_features['clock-source']['setter'](
@@ -747,7 +850,7 @@ def on_press(btn, *args):
             cfg_sin_self_connect_mode.value['value']
         )
         cfg_sin_self_connect_mode.modified = False
-    is_configuring = False
+    navigation.to_main()
 
 @window.event
 def on_resize(x, y):
