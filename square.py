@@ -21,11 +21,9 @@ uniform WindowBlock
 } window;
 
 out float geosize;
-out vec2 center;
 void main()
 {
     gl_Position = window.projection * window.view * vec4(myposition, 0.0, 1.0);
-    center = gl_Position.xy;
     geosize = mysize;
 }
     """
@@ -81,7 +79,7 @@ void main()
     geometry_source_on = """
 #version 330 core
 layout (points) in;
-layout (triangle_fan, max_vertices=5) out;
+layout (triangle_strip, max_vertices=5) out;
 
 uniform WindowBlock
 {
@@ -96,24 +94,22 @@ out vec3 vertex_color;
 
 void emit_offset(float x, float y, vec3 color) {
     gl_Position = gl_in[0].gl_Position
-        + window.projection * vec4(x - mysize/2, y - mysize/2, .0, .0)
+        + window.projection * vec4(x - mysize/2, y - mysize/2, .0, .0);
     vertex_color = color;
     EmitVertex();
 }
 void main() {
-    emit_offset(0, 0, vec3(0.));  // center fan
+    emit_offset(0., 0., vec3(1., 0., 0.));
     emit_offset(mysize, 0., vec3(0., 1., 0.));
-    emit_offset(mysize, mysize, vec3(0., 1., 0.));
-    emit_offset(0, mysize, vec3(0., 0., 1.));
-    emit_offset(mysize, 0, vec3(0., 1., 0.));
+    emit_offset(mysize, mysize, vec3(0., 1., 0.));  // RGG
+    emit_offset(0, mysize, vec3(0., 0., 1.));  // GGB
+    emit_offset(0, 0, vec3(1., 0., 1.));  // GBM
     EndPrimitive();
 }
     """
 
     fragment_source_on = """
 #version 330 core
-
-in vec2 center;
 in vec3 vertex_color;
 void main()
 {
@@ -173,7 +169,8 @@ square_button = SquareButton()
 square_button.add(20., 25., 20., False)
 square_button.add(50., 50., 20., True)
 square_button.add(200., 200., 20., False)
-square_button.add(100., 125., 180., True)
+square_button.add(100., 25., 180., True)
+square_button.add(200., 0., 390., True)
 batch = pyglet.graphics.Batch()
 square_button.compile(batch)
 
