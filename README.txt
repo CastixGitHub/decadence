@@ -55,3 +55,7 @@ When to Switch Master? I don't know…
 When to Reset Xruns? when you want to, helps keeping an eye on your load and latency
 
 Cadence now shows clock sources disabled… That's expected and fine (if that somehow broke something for you, reset from cadence). Cadence clock selection is for jack2<1.9.10 (~2014)
+
+Where is alsa_in / alsa_out ? (Bridging ALSA 2 JACK)
+ - install media-sound/jack-example-tools with alsa USE flag
+   REPO: https://github.com/jackaudio/jack-example-tools
