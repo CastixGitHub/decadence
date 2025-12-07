@@ -1,4 +1,3 @@
-
 import pyglet
 from pyglet.graphics.shader import Shader, ShaderProgram
 from pyglet.gui.widgets import WidgetBase
@@ -21,7 +20,7 @@ class SinButton(RWidgetBase):
         label: 'Label',
         x: float,
         y: float,
-        size: float = 25.,
+        size: 'float | tuple[float, float]' = 25.,
         is_on: bool = False,
         radio_group: 'str | False' = False,
         is_enabled: bool = True,
@@ -30,14 +29,12 @@ class SinButton(RWidgetBase):
         self.buttons = buttons
         self.label = label
         self._x, self._y = x, y
-        self.size = size
-        self._width = size
-        self._height = size
+        self._width = size if isinstance(size, (int, float)) else size[0]
+        self._height = size if isinstance(size, (int, float)) else size[1]
         self.is_on = is_on
         self.is_radio = radio_group
         self.is_enabled = is_enabled
         self.is_active = False  # render nothing by default
-        # TODO: hover
         self._value = value
         self.buttons.add(self)
         self.modified = False
@@ -137,7 +134,7 @@ class SinButtons():
     vertex_source = """
 #version 330 core
 in vec2 myposition;
-in float mysize;
+in vec2 mysize;
 
 uniform WindowBlock
 {
@@ -145,14 +142,16 @@ uniform WindowBlock
     mat4 view;
 } window;
 
-out float geosize;
+out vec2 geosize;
 
 in float is_on;
 in float is_radio;
 in float is_enabled;
+in float is_hover;
 out float geo_on;
 out float geo_radio;
 out float geo_enabled;
+out float geo_hover;
 
 void main()
 {
@@ -161,6 +160,7 @@ void main()
     geo_on = is_on;
     geo_radio = is_radio;
     geo_enabled = is_enabled;
+    geo_hover = is_hover;
 }
     """
     geometry_source = """
@@ -174,17 +174,20 @@ uniform WindowBlock
     mat4 view;
 } window;
 
-in float geosize[];
+in vec2 geosize[];
 in float geo_enabled[];
+in float geo_hover[];
 
 out vec3 vertex_color;
 out float is_enabled;
+out float is_hover;
 
 
 void emit_origin(vec3 color) {
     gl_Position = gl_in[0].gl_Position;
     vertex_color = color;
     is_enabled = geo_enabled[0];
+    is_hover = geo_hover[0];
     EmitVertex();
 }
 
@@ -193,15 +196,16 @@ void emit_offset(float x, float y, vec3 color) {
         + window.projection * vec4(x, y, .0, .0);
     vertex_color = color;
     is_enabled = geo_enabled[0];
+    is_hover = geo_hover[0];
     EmitVertex();
 }
 
 void main() {
-    float mysize = geosize[0];
+    vec2 mysize = geosize[0];
     emit_origin(vec3(1., .0, .0));
-    emit_offset(mysize, 0., vec3(.0, 1.0, .0));
-    emit_offset(mysize, mysize, vec3(.0, 1.0, .0));
-    emit_offset(0., mysize, vec3(.0, .0, 1.0));
+    emit_offset(mysize.x, 0., vec3(.0, 1.0, .0));
+    emit_offset(mysize.x, mysize.y, vec3(.0, 1.0, .0));
+    emit_offset(0., mysize.y, vec3(.0, .0, 1.0));
     emit_origin(vec3(1., .0, 1.0));
     EndPrimitive();
 }
@@ -211,12 +215,16 @@ void main() {
 uniform float time;
 in vec3 vertex_color;
 in float is_enabled;
+in float is_hover;
 void main()
 {
     vec3 color = vertex_color;
     if (is_enabled == 0) {
         float n = (color.x + color.y + color.z) / 3;
         color = vec3(n);
+    }
+    if (is_hover == 1) {
+        color = color + vec3(0.3);
     }
     gl_FragColor = vec4(color, 1.0);
 }
@@ -233,23 +241,24 @@ uniform WindowBlock
     mat4 view;
 } window;
 
-in float geosize[];
-float mysize = geosize[0];
-float hs = mysize/2;
+in vec2 geosize[];
+vec2 mysize = geosize[0];
 
 in float geo_on[];
 in float geo_radio[];
 in float geo_enabled[];
+in float geo_hover[];
 
 out vec3 vertex_color;
 out vec2 color_mult;
 out float is_on;
 out float is_radio;
 out float is_enabled;
+out float is_hover;
 
 void emit_offset(float x, float y, vec3 color) {
     gl_Position = gl_in[0].gl_Position
-        + window.projection * vec4(x - hs, y - hs, .0, .0);
+        + window.projection * vec4(x - mysize.x/2, y - mysize.y/2, .0, .0);
     vertex_color = color;
     float mx = 0;
     float my = 0;
@@ -258,7 +267,7 @@ void emit_offset(float x, float y, vec3 color) {
         my = 0;
     } else if (color == vec3(0., 1, 0)) {
         mx = 1;
-        my = y == mysize ? 1 : 0;
+        my = y == mysize.y ? 1 : 0;
     } else if (color == vec3(0., 0, 1)) {
         mx = 0;
         my = 1;
@@ -270,13 +279,14 @@ void emit_offset(float x, float y, vec3 color) {
     is_on = geo_on[0];
     is_radio = geo_radio[0];
     is_enabled = geo_enabled[0];
+    is_hover = geo_hover[0];
     EmitVertex();
 }
 void main() {
     emit_offset(0., 0., vec3(1., 0., 0.));
-    emit_offset(mysize, 0., vec3(0., 1., 0.));
-    emit_offset(mysize, mysize, vec3(0., 1., 0.));  // RGG
-    emit_offset(0, mysize, vec3(0., 0., 1.));  // GGB
+    emit_offset(mysize.x, 0., vec3(0., 1., 0.));
+    emit_offset(mysize.x, mysize.y, vec3(0., 1., 0.));  // RGG
+    emit_offset(0, mysize.y, vec3(0., 0., 1.));  // GGB
     emit_offset(0, 0, vec3(1., 0., 1.));  // GBM
     EndPrimitive();
 }
@@ -289,6 +299,7 @@ in vec2 color_mult;
 in float is_on;
 in float is_radio;
 in float is_enabled;
+in float is_hover;
 void main()
 {
     float n = sin(color_mult[0] * 3.1415);
@@ -312,6 +323,9 @@ void main()
         float m = (color.x + color.y + color.z) / 3;
         color = vec3(m);
     }
+    if (is_hover == 1) {
+        color = color + vec3(0.3);
+    }
     gl_FragColor = vec4(color, 1.);
 }
     """
@@ -328,6 +342,7 @@ void main()
             (self.fragment_source_on, 'fragment'),
         )
         self.boxes = []
+        self._hovering = None
         self.square_vertices = None
         self.on_vertices = None
         self.batch = None
@@ -353,12 +368,11 @@ void main()
             if not box.is_active:
                 assert box is not btn, 'Reused is_radio name across screens'
                 continue
-            if box.is_on or box.is_radio:  # on or is_radio
-                if box is btn:
+            if box is btn:
+                if box.is_on or box.is_radio:
                     return count
+            if box.is_on or box.is_radio:  # on or is_radio
                 count += 1
-            elif box is btn:
-                return count
 
     def populate(self, batch=None, group=None):
         if self.square_vertices:
@@ -379,13 +393,15 @@ void main()
         coords = ('f', (_coords := []))
         size = ('f', (_size := []))
         is_enabled = ('f', (_is_enabled := []))
+        is_hover = ('f', (_is_hover := []))
         for box in self.boxes:
             if not box.is_active or box.is_radio:  # skip the border
                 count -= 1
                 continue
             _coords.extend((box.x, box.y))
-            _size.append(box.size)
+            _size.extend((box._width, box._height))
             _is_enabled.append(box.is_enabled)
+            _is_hover.append(1 if self._hovering is box else 0)
         self.square_vertices = self.program_square.vertex_list(
             count,
             pyglet.gl.GL_POINTS,
@@ -393,6 +409,7 @@ void main()
             myposition=coords,
             mysize=size,
             is_enabled=is_enabled,
+            is_hover=is_hover,
         )
         count = 0
         coords = ('f', (_coords := []))
@@ -400,17 +417,18 @@ void main()
         is_on = ('f', (_is_on := []))
         is_radio = ('f', (_is_radio := []))
         is_enabled = ('f', (_is_enabled := []))
+        is_hover = ('f', (_is_hover := []))
         for box in self.boxes:
             if not box.is_active:
                 continue
             if box.is_on or box.is_radio:  # on or is_radio
                 count += 1
-                hs = box.size / 2
-                _coords.extend((box.x + hs, box.y + hs))
-                _size.append(box.size)
+                _coords.extend((box.x + box._width/2, box.y + box._height/2))
+                _size.extend((box._width, box._height))
                 _is_on.append(1 if box.is_on else 0)
                 _is_radio.append(1 if box.is_radio else 0)
                 _is_enabled.append(box.is_enabled)
+                _is_hover.append(1 if self._hovering is box else 0)
         self.on_vertices = self.program_on.vertex_list(
             count,
             pyglet.gl.GL_POINTS,
@@ -420,7 +438,22 @@ void main()
             is_radio=is_radio,
             is_on=is_on,
             is_enabled=is_enabled,
+            is_hover=is_hover,
         )
+
+    @property
+    def hovering(self):
+        return self._hovering
+
+    @hovering.setter
+    def hovering(self, btn):
+        self.square_vertices.is_hover[:] = [0] * self.square_vertices.count
+        self.on_vertices.is_hover[:] = [0] * self.on_vertices.count
+        if btn is not None:
+            if (idx := self.idx_square(btn)) is not None:
+                self.square_vertices.is_hover[idx] = 1
+            if (idx := self.idx_status(btn)) is not None:
+                self.on_vertices.is_hover[idx] = 1
 
 
 class SinScreens(RWidgetBase):
@@ -453,6 +486,15 @@ class SinScreens(RWidgetBase):
                 btn.on_press()
                 return
 
+    def on_mouse_motion(self, x, y, dx, dy):
+        for btn in self._cls_sin_buttons.boxes:
+            if btn.is_active and btn._check_hit(x, y):
+                self._cls_sin_buttons.hovering = btn
+                break
+        else:
+            self._cls_sin_buttons.hovering = None
+
+
 
 if __name__ == '__main__':
     from pyglet.window import Window
@@ -464,19 +506,19 @@ if __name__ == '__main__':
 
     class Sub(SinButton):
         def on_press(self):
-            super().on_press()
+            #super().on_press()
             buttons.set_active('other')
-
 
     buttons = SinScreens(window)
     #                       x     y     size  is_on  is_radio  is_enabled value
-    buttons.add('main', '', 1.0,  1.0,  20.,  False, 'a',      True,     1, cls=Sub)
+    buttons.add('main', '', 1.0,  1.0,  20.,  False, 'a',      True,     1)
     buttons.add('main', '', 1.0,  22.0, 20.,  False, False,    True)
     buttons.add('main', '', 25.,  1.0,  20.,  True,  'a',      False,      33)
     buttons.add('main', '', 25.,  22.0, 20.,  True,  False,    True)
     buttons.add('main', '', 50.,  1.0,  25.,  True,  'b',      True)
     buttons.add('main', '', 50.,  30.0, 25.,  True,  'b',      True)
     buttons.add('main', '', 50.,  60.0, 25.,  True,  'b',      True)
+    buttons.add('main', '', 100.,  1.0, (100., 25),  True,  False,      True, cls=Sub)
     back = buttons.add('other', '', 25., 22.0, 20.,  True,  False,    True)
     buttons.add('other', '', 50., 1.0,  25.,  True,  'c',      True)
     buttons.add('other', '', 50., 30.0, 25.,  True,  'c',      True)
@@ -493,6 +535,4 @@ if __name__ == '__main__':
         window.clear()
         buttons.batch.draw()
 
-
-    #breakpoint()
     pyglet.app.run(.05)
