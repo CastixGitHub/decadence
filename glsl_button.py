@@ -22,17 +22,18 @@ class SinButton(RWidgetBase):
         y: float,
         size: 'float | tuple[float, float]' = 25.,
         is_on: bool = False,
-        radio_group: 'str | False' = False,
+        is_radio: 'str | False' = False,
         is_enabled: bool = True,
         value: 'Any' = None,
     ):
         self.buttons = buttons
         self.label = label
-        self._x, self._y = x, y
         self._width = size if isinstance(size, (int, float)) else size[0]
         self._height = size if isinstance(size, (int, float)) else size[1]
+        self._x = x
+        self._y = y - self._height
         self.is_on = is_on
-        self.is_radio = radio_group
+        self.is_radio = is_radio
         self.is_enabled = is_enabled
         self.is_active = False  # render nothing by default
         self._value = value
@@ -42,7 +43,7 @@ class SinButton(RWidgetBase):
     @property
     def others(self):
         assert self.is_radio, 'missing is_radio (grouping)'
-        return [btn for btn in self.buttons if btn.is_radio == self.is_radio]
+        return [btn for btn in self.buttons.boxes if btn.is_radio == self.is_radio]
 
     @property
     def value(self):
@@ -89,9 +90,10 @@ class SinButton(RWidgetBase):
             # TODO: toggle all the radio in is_radio "group"
             grouped = []
             for btn in self.buttons.boxes:
-                if btn.is_radio == self.is_radio and btn.is_active:
+                if btn.is_radio and btn.is_radio == self.is_radio and btn.is_active:
                     grouped.append(btn)
             for btn in grouped:
+                btn.modified = True
                 idx = self.buttons.idx_status(btn)
                 assert idx is not None, 'toggling non-existing button'
                 self.buttons.on_vertices.is_on[idx] = 0
@@ -100,20 +102,25 @@ class SinButton(RWidgetBase):
             self.buttons.on_vertices.is_on[idx] = 1
             self.is_on = not self.is_on if value is None else value
 
+    def mark_group_as_not_modified(self):
+        for btn in self.buttons.boxes:
+            if btn.is_active and btn.is_radio == self.is_radio:
+                btn.modified = False
+
     def move(self, x, y):
         self._x, self._y = x, y
         if not self.is_active:
             return
         if not self.is_radio:
-            idx_square = self.buttons.idx_square(self)
-            assert idx_square, 'no idx found (square)'
-            self.buttons.square_vertices.myposition[idx_square].x = x
-            self.buttons.square_vertices.myposition[idx_square].y = y
+            if (idx_square := self.buttons.idx_square(self)) is not None:
+                self.buttons.square_vertices.myposition[idx_square * 2] = x
+                self.buttons.square_vertices.myposition[idx_square * 2 + 1] = y
         if self.is_radio or self.is_on:
-            idx_status = self.buttons.idx_status(self)
-            assert idx_status, 'no idx found (on)'
-            self.buttons.on_vertices.myposition[idx_status].x = x
-            self.buttons.on_vertices.myposition[idx_status].y = y
+            if (idx_status := self.buttons.idx_status(self)) is not None:
+                self.buttons.on_vertices.myposition[idx_status * 2] =\
+                    x + self.buttons.on_vertices.mysize[idx_status * 2] / 2
+                self.buttons.on_vertices.myposition[idx_status * 2 + 1] =\
+                    y + self.buttons.on_vertices.mysize[idx_status * 2 + 1] / 2
 
     def _update_position(self):
         # doing self.position = (x, y) calls this
@@ -447,6 +454,9 @@ void main()
 
     @hovering.setter
     def hovering(self, btn):
+        self._hovering = btn
+        if self.square_vertices is None or self.on_vertices is None:
+            return
         self.square_vertices.is_hover[:] = [0] * self.square_vertices.count
         self.on_vertices.is_hover[:] = [0] * self.on_vertices.count
         if btn is not None:
@@ -511,18 +521,19 @@ if __name__ == '__main__':
 
     buttons = SinScreens(window)
     #                       x     y     size  is_on  is_radio  is_enabled value
-    buttons.add('main', '', 1.0,  1.0,  20.,  False, 'a',      True,     1)
-    buttons.add('main', '', 1.0,  22.0, 20.,  False, False,    True)
-    buttons.add('main', '', 25.,  1.0,  20.,  True,  'a',      False,      33)
-    buttons.add('main', '', 25.,  22.0, 20.,  True,  False,    True)
-    buttons.add('main', '', 50.,  1.0,  25.,  True,  'b',      True)
-    buttons.add('main', '', 50.,  30.0, 25.,  True,  'b',      True)
-    buttons.add('main', '', 50.,  60.0, 25.,  True,  'b',      True)
-    buttons.add('main', '', 100.,  1.0, (100., 25),  True,  False,      True, cls=Sub)
-    back = buttons.add('other', '', 25., 22.0, 20.,  True,  False,    True)
-    buttons.add('other', '', 50., 1.0,  25.,  True,  'c',      True)
-    buttons.add('other', '', 50., 30.0, 25.,  True,  'c',      True)
-    buttons.add('other', '', 50., 60.0, 25.,  True,  'c',      True)
+    buttons.add('main', '', 1.0,  21.0, 20.,  False, 'a',      True,     1)
+    buttons.add('main', '', 1.0,  42.0, 20.,  False, False,    True)
+    buttons.add('main', '', 25.,  21.0, 20.,  True,  'a',      False,      33)
+    buttons.add('main', '', 25.,  42.0, 20.,  True,  False,    True)
+    buttons.add('main', '', 50.,  26.0, 25.,  False,  'b',      True)
+    buttons.add('main', '', 50.,  55.0, 25.,  False,  'b',      True)
+    buttons.add('main', '', 50.,  85.0, 25.,  True,  'b',      True)
+    buttons.add('main', '', 100.,  26.0, (100., 25),  True,  False,      True, cls=Sub)
+    buttons.add('main', '', 500.0,  300.0, 40.,  False, False,    True)
+    back = buttons.add('other', '', 25., 42.0, 20.,  True,  False,    True)
+    buttons.add('other', '', 50., 26.0, 25.,  True,  'c',      True)
+    buttons.add('other', '', 50., 55.0, 25.,  False,  'c',      True)
+    buttons.add('other', '', 50., 85.0, 25.,  False,  'c',      True)
     buttons.set_active('main')
 
     @back.event

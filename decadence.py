@@ -2,10 +2,11 @@
 import pyglet
 from pyglet.window import Window
 from pyglet.text import Label
-from pyglet.gui import Frame, PushButton, ToggleButton, TextEntry
-from pyglet.image import ImageData
+from pyglet.gui import TextEntry
 from functools import partial
 from sys import stderr
+
+from glsl_button import SinScreens, SinButton
 
 import dbus  # dbus-python on PyPi
 # gdbus introspect -e -d org.jackaudio.service -o /org/jackaudio/Controller
@@ -56,18 +57,18 @@ def error_dialog(msg, title='Error'):
                 break
         b.draw()
 
-btn_w, btn_h = 50, 20
+btn_w, btn_h = 60, 20
 def welcome_x(): return window.width // 2
 def welcome_y(): return window.height - 25
 def status_y(i): return window.height - 50 - (btn_h + 5) * i
 def status_btn_x(): return window.width - 15 - btn_w
 def status_btn_y(i): return window.height - 50 - (btn_h + 5) * i
-def status_btnl_x(): return window.width - 15 - btn_w + 2
+def status_btnl_x(): return window.width - 15 - btn_w + 6
 def status_btnl_y(i): return window.height - 50 + 4 - (btn_h + 5) * i
 def cfg_title_x(offset=0): return offset + 15
 def cfg_title_y(offset=window.height - 50): return offset
 def cfg_btn_x(i, offset=0): return offset + 15
-def cfg_btn_y(i, offset=window.height - 75): return offset - 20 * i - 2 * i
+def cfg_btn_y(i, offset=window.height - 75): return offset + 20 - 20 * i - 2 * i
 def cfg_btnl_x(i, offset=0): return offset + 15 + 20 + 2
 def cfg_btnl_y(i, offset=window.height - 75): return offset - 20 * i - 2 * i + 4
 def cfg_int_x(_): return window.width - 15 - 50
@@ -75,56 +76,17 @@ def cfg_int_y(i): return window.height - 50 - 30 * i
 def cfg_intl_x(_): return window.width - 15 - 50 - 5
 def cfg_intl_y(i): return window.height - 50 - 30 * i - 2 * i + 10
 def cfg_action_x(i): return 10 + btn_w * i + 5 * i
-def cfg_action_y(): return 10
+def cfg_action_y(): return 10 + btn_h
 
 GREEN = (0x0c, 0xcc, 0x0b, 0xff)
 RED = (0xcc, 0x0c, 0x0b, 0xff)
 YELL = (0xcc, 0xca, 0x0b, 0xff)
+BLACK = (0x00, 0x00, 0x00, 0xff)
 
 
-# wants some image to use a button...
-from struct import Struct
-btn_unpressed_unpacked = []
-btn_pressed_unpacked = []
-btn_hover_unpacked = []
-for _ in range(btn_w*btn_h):
-    btn_unpressed_unpacked.extend((0x66, 0x66, 0x66))
-    btn_pressed_unpacked.extend((0x33, 0x33, 0x33))
-    btn_hover_unpacked.extend((0x44, 0x44, 0x44))
-img_btn_unpressed = ImageData(
-    width=btn_w, height=btn_h, fmt='RGB',
-    data=Struct('BBB'*btn_w*btn_h).pack(*btn_unpressed_unpacked),
-)
-img_btn_pressed = ImageData(
-    width=btn_w, height=btn_h, fmt='RGB',
-    data=Struct('BBB'*btn_w*btn_h).pack(*btn_pressed_unpacked),
-)
-img_btn_hover = ImageData(
-    width=btn_w, height=btn_h, fmt='RGB',
-    data=Struct('BBB'*btn_w*btn_h).pack(*btn_hover_unpacked),
-)
-del btn_unpressed_unpacked, btn_pressed_unpacked, btn_hover_unpacked
-
-sinbtn_w, sinbtn_h = 20, 20 # it's a nice solid color
-sinbtn_unpressed_unpacked = [*([0x66] * 3), 0xff] * sinbtn_w * sinbtn_h
-sinbtn_pressed_unpacked = [*([0x33] * 3), 0xff] * sinbtn_w * sinbtn_h
-sinbtn_hover_unpacked = [*([0x44] * 3), 0xff] * sinbtn_w * sinbtn_h
-img_sinbtn_unpressed = ImageData(
-    width=sinbtn_w, height=sinbtn_h, fmt='RGBA',
-    data=Struct('BBBB'*sinbtn_w*sinbtn_h).pack(*sinbtn_unpressed_unpacked),
-)
-img_sinbtn_pressed = ImageData(
-    width=sinbtn_w, height=sinbtn_h, fmt='RGBA',
-    data=Struct('BBBB'*sinbtn_w*sinbtn_h).pack(*sinbtn_pressed_unpacked),
-)
-img_sinbtn_hover = ImageData(
-    width=sinbtn_w, height=sinbtn_h, fmt='RGBA',
-    data=Struct('BBBB'*sinbtn_w*sinbtn_h).pack(*sinbtn_hover_unpacked),
-)
-
-
+'''
 # mhhh, a pyglet bug, https://github.com/pyglet/pyglet/blob/f93b602ea3dde726c6661aa8aaf7400d132f445a/pyglet/gui/widgets.py#L268
-#breakpoint()
+# I'm keeping them but I'm not using them...
 from inspect import getsource
 for evt_name in ('on_mouse_leave', 'on_mouse_release'):
     _source = getsource(getattr(PushButton, evt_name))
@@ -141,97 +103,31 @@ for evt_name in ('on_mouse_leave', 'on_mouse_release'):
     print(_source, file=stderr)
     exec(_source, (_glo := {}), (_loc := {}))
     setattr(PushButton, evt_name, _loc[evt_name])
-
-class Navigation:  # just frame (event) handling
-    # ooooo, WidgetBase has enabled
-    #         and Frame has enable
-    class FakeFrame:  # Frame doesn't work with TextEntry
-        def __init__(self, window, enable=False):
-            self.window = window
-            self.widgets = set()
-            self._enable = enable
-        def add_widget(self, widget):
-            self.widgets.add(widget)
-            if self._enable:
-                for widget in self.widgets:
-                    self.window.remove_handlers(widget)
-                    self.window.push_handlers(widget)
-        @property
-        def enable(self):
-            return self._enable
-        @enable.setter
-        def enable(self, enabled):
-            self._enable = enabled
-            for widget in self.widgets:
-                if enabled:
-                    self.window.remove_handlers(widget)
-                    self.window.push_handlers(widget)
-                else:
-                    self.window.remove_handlers(widget)
-    def __init__(self, window):
-        # pyglet.gui.frame.Frame is WIP
-        self.main_frame = Frame(window, enable=True)
-        self.configure_frame = self.FakeFrame(window, enable=False)
-        self.to_main()
-
-    # TODO: pyglet bug: I have to push/pop event handlers, setting enable should do it
-    def to_main(self):
-        self.name = 'main'
-        self.main_frame.enable = True
-        window.push_handlers(self.main_frame)
-        self.configure_frame.enable = False
-
-    def to_engine(self):
-        self.name = 'engine'
-        self.main_frame.enable = False
-        window.remove_handlers(self.main_frame)
-        self.configure_frame.enable = 'engine'
-
-navigation = Navigation(window)
-
-class SinButtons:  # RadioButtonGroup
-    def __init__(self, batch):
-        self._sin = []
-        self.frame = navigation.configure_frame
-        self.batch = batch
-        self.modified = False
-    def __iadd__(self, obj):#btn: ToggleButton, label: Label):
-        btn, label, extra = obj
-        self._sin.append((btn, label))
-        btn.set_handler('on_toggle', self.on_toggle)
-        self.frame.add_widget(btn)
-        btn.extra=extra
-        # btn.batch = self.batch  # unavailable
-        # label.batch = self.batch  # kinda works but
-        return self
-    def on_toggle(self, btn: ToggleButton, value):
-        #print('toggle', self, value)
-        if value is not None:
-            self.modified = True
-        for _btn, _ in self._sin:
-            _btn._pressed = _btn is btn
-            _btn._sprite.image = _btn._pressed_img\
-                if _btn._pressed else _btn._unpressed_img
-    def draw(self):
-        self.batch.draw()
-    @property
-    def value(self):
-        for _btn, _ in self._sin:
-            if _btn._pressed:
-                return _btn.extra
-
-    def _set_value(self, value):
-        for _btn, _ in self._sin:
-            if _btn.extra['value'] == value:
-                self.on_toggle(_btn, None)
-                return
+'''
 
 
 # drawing disorder and order
 batch_status = pyglet.graphics.Batch()
-GRP0 = pyglet.graphics.Group(0)
-GRP1 = pyglet.graphics.Group(1)
-GRP2 = pyglet.graphics.Group(2)
+batch_status_btnl = pyglet.graphics.Batch()
+
+btns = SinScreens(window)
+class Navigation:
+    def to_main(self):
+        global window, btns, cfg_integers
+        self.name = 'main'
+        btns.set_active('main')
+        for feat in cfg_integers.values():
+            window.remove_handlers(feat['integer_entry'])
+
+    def to_engine(self):
+        global window, btns, cfg_integers
+        self.name = 'engine'
+        btns.set_active('engine')
+        for feat in cfg_integers.values():
+            window.push_handlers(feat['integer_entry'])
+
+
+navigation = Navigation()
 
 
 # Home UI elements
@@ -247,165 +143,180 @@ server_status = Label(
     'Server Status:',
     x=status_x, y=status_y(0),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 server_status_val = Label(
     '---',
     x=status_x2, y=status_y(0),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 rt_status = Label(
     'Realtime:',
     x=status_x, y=status_y(1),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 rt_status_val = Label(
     '---',
     x=status_x2, y=status_y(1),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 dsp_status = Label(
     'DSP Load:',
     x=status_x, y=status_y(2),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 dsp_status_val = Label(
     '---',
     x=status_x2, y=status_y(2),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 xruns_status = Label(
     'Xruns:',
     x=status_x, y=status_y(3),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 xruns_status_val = Label(
     '---',
     x=status_x2, y=status_y(3),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 buffer_size_status = Label(
     'Buffer Size:',
     x=status_x, y=status_y(4),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 buffer_size_status_val = Label(
     '---',
     x=status_x2, y=status_y(4),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 sr_status = Label(
     'Sample Rate:',
     x=status_x, y=status_y(5),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 sr_status_val = Label(
     '---',
     x=status_x2, y=status_y(5),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 bl_status = Label(
     'Block Latency:',
     x=status_x, y=status_y(6),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 bl_status_val = Label(
     '---',
     x=status_x2, y=status_y(6),
     font_name='monospace', font_size=13,
-    batch=batch_status, group=GRP0,
+    batch=batch_status,
 )
 
 
-start_status_btn = PushButton(
+class MainButton(SinButton):
+    def on_press(widget):
+        print('on_press', widget)
+        if configure_status_btn is widget:
+            navigation.to_engine()
+            return
+        if action := dbus_buttons.get(widget):
+            try:
+                action()
+            except BaseException as exc:
+                error_dialog(str(exc))
+        else:
+            print(msg := 'UNKNOWN button pressed')
+            error_dialog(msg)
+
+start_status_btn = btns.add(
+    'main',
+    (start_status_btn_label := Label(
+        'Start',
+        x=status_btnl_x(), y=status_btnl_y(0),
+        font_name='monospace', font_size=10, color=GREEN,
+        batch=batch_status_btnl,
+    )),
     x=status_btn_x(), y=status_btn_y(0),
-    unpressed=img_btn_unpressed,
-    pressed=img_btn_pressed,
-    hover=img_btn_hover,
-    batch=batch_status, group=GRP1,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=MainButton,
 )
-start_status_btn_label = Label(
-    'Start',
-    x=status_btnl_x(), y=status_btnl_y(0),
-    font_name='monospace', font_size=10, color=GREEN,
-    batch=batch_status, group=GRP2,
-)
-stop_status_btn = PushButton(
+stop_status_btn = btns.add(
+    'main',
+    (stop_status_btn_label := Label(
+        'Stop',
+        x=status_btnl_x(), y=status_btnl_y(1),
+        font_name='monospace', font_size=10, color=BLACK,
+        batch=batch_status_btnl,
+    )),
     x=status_btn_x(), y=status_btn_y(1),
-    unpressed=img_btn_unpressed,
-    pressed=img_btn_pressed,
-    hover=img_btn_hover,
-    batch=batch_status, group=GRP1,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=MainButton,
 )
-stop_status_btn_label = Label(
-    'Stop',
-    x=status_btnl_x(), y=status_btnl_y(1),
-    font_name='monospace', font_size=10,
-    batch=batch_status, group=GRP2,
-)
-force_restart_status_btn = PushButton(
+force_restart_status_btn = btns.add(
+    'main',
+    (force_restart_status_btn_label := Label(
+        'Kill',
+        x=status_btnl_x(), y=status_btnl_y(2),
+        font_name='monospace', font_size=10, color=RED,
+        batch=batch_status_btnl,
+    )),
     x=status_btn_x(), y=status_btn_y(2),
-    unpressed=img_btn_unpressed,
-    pressed=img_btn_pressed,
-    hover=img_btn_hover,
-    batch=batch_status, group=GRP1,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=MainButton,
 )
-force_restart_status_btn_label = Label(
-    'Kill',
-    x=status_btnl_x(), y=status_btnl_y(2),
-    font_name='monospace', font_size=10, color=RED,
-    batch=batch_status, group=GRP2,
-)
-reset_xruns_status_btn = PushButton(
+reset_xruns_status_btn = btns.add(
+    'main',
+    (reset_xruns_status_btn_label := Label(
+        'X ok',
+        x=status_btnl_x(), y=status_btnl_y(3),
+        font_name='monospace', font_size=10, color=BLACK,
+        batch=batch_status_btnl,
+    )),
     x=status_btn_x(), y=status_btn_y(3),
-    unpressed=img_btn_unpressed,
-    pressed=img_btn_pressed,
-    hover=img_btn_hover,
-    batch=batch_status, group=GRP1,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=MainButton,
 )
-reset_xruns_status_btn_label = Label(
-    'X ok',
-    x=status_btnl_x(), y=status_btnl_y(3),
-    font_name='monospace', font_size=10,
-    batch=batch_status, group=GRP2,
-)
-switch_master_status_btn = PushButton(
+switch_master_status_btn = btns.add(
+    'main',
+    (switch_master_status_btn_label := Label(
+        'S Mast',
+        x=status_btnl_x(), y=status_btnl_y(4),
+        font_name='monospace', font_size=10, color=BLACK,
+        batch=batch_status_btnl,
+    )),
     x=status_btn_x(), y=status_btn_y(4),
-    unpressed=img_btn_unpressed,
-    pressed=img_btn_pressed,
-    hover=img_btn_hover,
-    batch=batch_status, group=GRP1,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=MainButton,
 )
-switch_master_status_btn_label = Label(
-    'S Mast',
-    x=status_btnl_x(), y=status_btnl_y(4),
-    font_name='monospace', font_size=10,
-    batch=batch_status, group=GRP2,
-)
-configure_status_btn = PushButton(
+configure_status_btn = btns.add(
+    'main',
+    (configure_status_btn_label := Label(
+        'Config',
+        x=status_btnl_x(), y=status_btnl_y(6),
+        font_name='monospace', font_size=10, color=BLACK,
+        batch=batch_status_btnl,
+    )),
     x=status_btn_x(), y=status_btn_y(6),
-    unpressed=img_btn_unpressed,
-    pressed=img_btn_pressed,
-    hover=img_btn_hover,
-    batch=batch_status, group=GRP1,
-)
-configure_status_btn_label = Label(
-    'Config',
-    x=status_btnl_x(), y=status_btnl_y(6),
-    font_name='monospace', font_size=10,
-    batch=batch_status, group=GRP2,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=MainButton,
 )
 
 # configure UI elements
@@ -446,31 +357,7 @@ dbus_buttons = {
     switch_master_status_btn: (lambda: d_jack.SwitchMaster()),
 }
 
-@start_status_btn.event
-@stop_status_btn.event
-@force_restart_status_btn.event
-@reset_xruns_status_btn.event
-@switch_master_status_btn.event
-def on_press(widget):
-    if action := dbus_buttons.get(widget):
-        try:
-            action()
-        except BaseException as exc:
-            error_dialog(str(exc))
-    else:
-        print(msg := 'UNKNOWN button pressed')
-        error_dialog(msg)
 
-@configure_status_btn.event
-def on_press(_):
-    navigation.to_engine()
-
-navigation.main_frame.add_widget(start_status_btn)
-navigation.main_frame.add_widget(stop_status_btn)
-navigation.main_frame.add_widget(force_restart_status_btn)
-navigation.main_frame.add_widget(reset_xruns_status_btn)
-navigation.main_frame.add_widget(switch_master_status_btn)
-navigation.main_frame.add_widget(configure_status_btn)
 
 def get_info():  # through dbus
     try:
@@ -541,17 +428,17 @@ for feat_name, feat in engine_features.items():
     feat['is_bool'] = isinstance(value, dbus.Boolean)
     feat['is_uint32'] = isinstance(value, dbus.UInt32)
     feat['is_int32'] = isinstance(value, dbus.Int32)
-cfg_toggles_batch = pyglet.graphics.Batch()
 cfg_toggles = {}
 i = 0
+
+cfg_engine_labels = pyglet.graphics.Batch()
+
 you_need_to_keep_a_ref_to_labels_somewhere = Label(
     'Engine Booleans:',
     x=cfg_title_x(), y=cfg_title_y(window.height - 120),
     font_name='monospace',
-    batch=cfg_toggles_batch,
-),
-def on_toggle_engine_bool(btn: ToggleButton, value: bool):
-    btn.modified = True
+    batch=cfg_engine_labels,
+)
 
 relabeling = {
     'sync': 'Server Syncronous Mode',
@@ -561,24 +448,21 @@ for feat_name, feat in engine_features.items():
     if feat['is_bool']:
         i += 1
         cfg_toggles[feat_name] = {
-            'btn': (btn := ToggleButton(
+            'btn': (btn := btns.add(
+                'engine',
+                (lbl := Label(
+                    relabeling.get(feat_name, feat_name.capitalize()),
+                    x=cfg_btnl_x(i), y=cfg_btnl_y(i, window.height - 120),
+                    font_name='monospace',
+                    batch=cfg_engine_labels,
+                )),
                 x=cfg_btn_x(i), y=cfg_btn_y(i, window.height - 120),
-                pressed=img_sinbtn_pressed,
-                unpressed=img_sinbtn_unpressed,
-                hover=img_sinbtn_hover,
-                batch=cfg_toggles_batch,
+                size=20,
+                is_on=False, is_radio=False, is_enabled=True,
             )),
-            'label': Label(
-                relabeling.get(feat_name, feat_name.capitalize()),
-                x=cfg_btnl_x(i), y=cfg_btnl_y(i, window.height - 120),
-                font_name='monospace',
-                batch=cfg_toggles_batch,
-            ),
+            'label': lbl,
         }
-        navigation.configure_frame.add_widget(btn)
-        btn.modified = False
         btn.feat_name = feat_name
-        btn.set_handler('on_toggle', on_toggle_engine_bool)
 
 cfg_sin_clock_source_feat = engine_features['clock-source']
 # ... 'Clocksource type : c(ycle) | h(pet) | s(ystem).'
@@ -599,57 +483,61 @@ cfg_title_cs = Label(
     'Clock Selection:',
     x=cfg_title_x(), y=cfg_title_y(),
     font_name='monospace',
-    batch=cfg_sin_cs_batch,
+    batch=cfg_engine_labels,
 )
-cfg_sin_clock_source = SinButtons(cfg_sin_cs_batch)
 for i, v in enumerate(cfg_sin_clock_source_cfg.items()):
     txt, val = v
-    cfg_sin_clock_source += (
-        ToggleButton(
-            x=cfg_btn_x(i), y=cfg_btn_y(i),
-            pressed=img_sinbtn_pressed,
-            unpressed=img_sinbtn_unpressed,
-            hover=img_sinbtn_hover,
-            batch=cfg_sin_cs_batch,
-        ),
+    # should be fine to lose radio buttons here
+    clk_btn = btns.add(
+        'engine',
         Label(
             txt,
             x=cfg_btnl_x(i), y=cfg_btnl_y(i),
             font_name='monospace',
-            batch=cfg_sin_cs_batch,
+            batch=cfg_engine_labels,
         ),
-        {'value': val},
+        x=cfg_btn_x(i), y=cfg_btn_y(i),
+        size=20,
+        is_on=False, is_radio='engine_clk', is_enabled=True,
+        value=val,
     )
 
-cfg_sin_scm_batch = pyglet.graphics.Batch()
-cfg_sin_self_connect_mode = SinButtons(cfg_sin_scm_batch)
 cfg_title_scm = Label(
     'Self Connect Mode:',
     x=cfg_title_x(), y=cfg_title_y(window.height - 260),
     font_name='monospace',
-    batch=cfg_sin_scm_batch,
+    batch=cfg_engine_labels,
 )
 self_connect_modes = engine_features['self-connect-mode']['constraints'].items()
 for i, kv in enumerate(self_connect_modes):
     text, val = kv
     if text in ('is_range', 'is_strict', 'is_fake_value'):
         break  # break altogeter then, they're at the end
-    cfg_sin_self_connect_mode += (
-        ToggleButton(
-            x=cfg_btn_x(i), y=cfg_btn_y(i, window.height - 280),
-            pressed=img_sinbtn_pressed,
-            unpressed=img_sinbtn_unpressed,
-            hover=img_sinbtn_hover,
-            batch=cfg_sin_scm_batch,
-        ),
+
+    scm_btn = btns.add(
+        'engine',
         Label(
             text,
             x=cfg_btnl_x(i), y=cfg_btnl_y(i, window.height - 280),
             font_name='monospace',
-            batch=cfg_sin_scm_batch,
+            batch=cfg_engine_labels,
         ),
-        {'value': val},
+        x=cfg_btn_x(i), y=cfg_btn_y(i, window.height - 280),
+        size=20,
+        is_on=False, is_radio='engine_scm', is_enabled=True,
+        value=val,
     )
+
+class IntegerEntry(TextEntry):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.modified = False
+    def on_text(self, text):
+        super().on_text(text)
+        if self._focus:
+            self.modified = True
+        # print('on_text', self, text)
+        # this thing is called on all the instances
 
 cfg_integers_batch = pyglet.graphics.Batch()
 i = 0
@@ -658,7 +546,7 @@ for feat_name, feat in engine_features.items():
     if (feat['is_uint32'] or feat['is_int32']) and feat_name != 'clock-source':
         i += 1
         cfg_integers[feat_name] = {
-            'text_entry': (te := TextEntry(
+            'integer_entry': IntegerEntry(
                 str(int(feat['getter']()[2])),
                 x=cfg_int_x(i), y=cfg_int_y(i),
                 width=50,
@@ -666,62 +554,103 @@ for feat_name, feat in engine_features.items():
                 text_color=(0x00, 0x00, 0x00, 0xff),
                 caret_color=(0x00, 0x00, 0x00, 0xff),
                 batch=cfg_integers_batch,
-            )),
+            ),
             'label': Label(
                 feat_name.replace('-', ' ').capitalize()
                 if feat_name != 'client-timeout'
                 else 'Client timeout (ms)',
                 x=cfg_intl_x(i), y=cfg_intl_y(i), anchor_x='right',
                 font_name='monospace',
-                batch=cfg_integers_batch,
+                batch=cfg_engine_labels,
             ),
         }
-        te.modified = False
-        navigation.configure_frame.add_widget(te)
 
-cfg_actions_batch = pyglet.graphics.Batch()
-cancel_btn = PushButton(
+class CancelBtn(SinButton):
+    def on_press(_):
+        navigation.to_main()
+
+class ResetBtn(SinButton):
+    def on_press(_):
+        engine_features['clock-source']['retter']()
+        engine_features['self-connect-mode']['retter']()
+        for feat_name, thing in cfg_toggles.items():
+            engine_features[feat_name]['retter']()
+            thing['btn'].modified = False
+        for feat_name, thing in cfg_integers.items():
+            engine_features[feat_name]['retter']()
+            thing['integer_entry'].modified = False
+        clk_btn.mark_group_as_not_modified()
+        scm_btn.mark_group_as_not_modified()
+        navigation.to_main()
+
+class SaveBtn(SinButton):
+    def on_press(_):
+        if clk_btn.modified:
+            try:
+                engine_features['clock-source']['setter'](
+                    dbus.UInt32(clk_btn.value)
+                )
+                clk_btn.mark_group_as_not_modified()
+                print(f'set engine.clock-source: {clk_btn.value}')
+            except dbus.exceptions.DBusException as exc:
+                msg = f'Error setting up engine parameter "clock-source"\n{exc}'
+                on_error(msg)
+        if scm_btn.modified:
+            #print(type(cfg_sin_self_connect_mode.value['value']))
+            engine_features['self-connect-mode']['setter'](scm_btn.value)
+            scm_btn.mark_group_as_not_modified()
+            print(f'set engine.self-connect-mode: {scm_btn.value}')
+        for feat_name, thing in cfg_toggles.items():
+            btn = thing['btn']
+            if btn.modified:
+                print(f'set engine.{feat_name}: {btn._pressed}')
+                engine_features[feat_name]['setter'](dbus.Boolean(btn._pressed))
+                btn.modified = False
+        for feat_name, thing in cfg_integers.items():
+            if (te := thing['integer_entry']).modified:
+                print(f'set (int) engine.{feat_name}: {te.value}')
+                te.modified = False
+        navigation.to_main()
+
+cancel_btn = btns.add(
+    'engine',
+    Label(
+        'Back',
+        x=cfg_action_x(0) + 6, y=cfg_action_y() - btn_h + 4,
+        font_name='monospace', color=BLACK,
+        batch=cfg_engine_labels,
+    ),
     x=cfg_action_x(0), y=cfg_action_y(),
-    pressed=img_btn_pressed,
-    unpressed=img_btn_unpressed,
-    hover=img_btn_hover,
-    batch=cfg_actions_batch, group=GRP0,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=CancelBtn,
 )
-cancel_btn._label = Label(
-    'Back',
-    x=cfg_action_x(0) + 2, y=cfg_action_y() + 4,
-    font_name='monospace',
-    batch=cfg_actions_batch, group=GRP1,
-)
-navigation.configure_frame.add_widget(cancel_btn)
-reset_btn = PushButton(
+reset_btn = btns.add(
+    'engine',
+    Label(
+        'Reset',
+        x=cfg_action_x(1) + 6, y=cfg_action_y() - btn_h + 4,
+        font_name='monospace', color=BLACK,
+        batch=cfg_engine_labels,
+    ),
     x=cfg_action_x(1), y=cfg_action_y(),
-    pressed=img_btn_pressed,
-    unpressed=img_btn_unpressed,
-    hover=img_btn_hover,
-    batch=cfg_actions_batch, group=GRP0,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=ResetBtn,
 )
-reset_btn._label = Label(
-    'Reset',
-    x=cfg_action_x(1) + 2, y=cfg_action_y() + 4,
-    font_name='monospace',
-    batch=cfg_actions_batch, group=GRP1,
-)
-navigation.configure_frame.add_widget(reset_btn)
-save_btn = PushButton(
+save_btn = btns.add(
+    'engine',
+    Label(
+        'Save',
+        x=cfg_action_x(2) + 6, y=cfg_action_y() - btn_h + 4,
+        font_name='monospace', color=BLACK,
+        batch=cfg_engine_labels,
+    ),
     x=cfg_action_x(2), y=cfg_action_y(),
-    pressed=img_btn_pressed,
-    unpressed=img_btn_unpressed,
-    hover=img_btn_hover,
-    batch=cfg_actions_batch, group=GRP0,
+    size=(btn_w, btn_h),
+    is_on=True, is_radio=False, is_enabled=True,
+    cls=SaveBtn,
 )
-save_btn._label = Label(
-    'Save',
-    x=cfg_action_x(2) + 2, y=cfg_action_y() + 4,
-    font_name='monospace',
-    batch=cfg_actions_batch, group=GRP1,
-)
-navigation.configure_frame.add_widget(save_btn)
 
 def update_engine_gui_state_clock_selection():
     # we receive 0 1 2 instead of c h s
@@ -741,7 +670,7 @@ def update_engine_gui_state_clock_selection():
     # - if it's "jack2<1.9.10" we disable clock selection
     # - we use s/h and you won't be able to change that from cadence anymore
     # - 0, 1 and 2 are all normalized to s (to fixup 1 is h instead of c)
-    if not cfg_sin_clock_source.modified:
+    if not clk_btn.modified:
         clock = int(cfg_sin_clock_source_feat['getter']()[2])
         if clock in (0, 1, 2):
             clock_selection = 'broken'
@@ -755,26 +684,28 @@ def update_engine_gui_state_clock_selection():
             _clock = ord('s')
         elif clock == ord('h'):
             _clock = ord('h')
-        cfg_sin_clock_source._set_value(_clock)
+        clk_btn.value = _clock
+        clk_btn.mark_group_as_not_modified()
 
 def update_engine_gui_self_connect_mode():
-    if not cfg_sin_self_connect_mode.modified:
+    if not scm_btn.modified:
         actual = int(engine_features['self-connect-mode']['getter']()[2])
-        cfg_sin_self_connect_mode._set_value(actual)
+        scm_btn.value = actual
+        scm_btn.mark_group_as_not_modified()
 
 def update_engine_gui_booleans():
     for thing in cfg_toggles.values():
         btn = thing['btn']
         if not btn.modified:
             actual = bool(engine_features[btn.feat_name]['getter']()[2])
-            btn._pressed = actual
-            btn._sprite.image = btn._pressed_img if actual else btn._unpressed_img
+            btn.toggle(actual)
+            btn.modified = False
 
 def update_engine_gui_integers():
     #return
     for feat_name, thing in cfg_integers.items():
-        if not thing['text_entry'].modified and not thing['text_entry'].focus:
-            thing['text_entry'].value = str(int(engine_features[feat_name]['getter']()[2]))
+        if not thing['integer_entry'].modified and not thing['integer_entry'].focus:
+            thing['integer_entry'].value = str(int(engine_features[feat_name]['getter']()[2]))
 
 def update_engine_gui_state():
     # we poll dbus and update the GUI unless modified
@@ -791,15 +722,16 @@ def draw():
     window.clear()
     welcome.draw()
     batch_status.draw()
+    btns.batch.draw()
+    batch_status_btnl.draw()
 
 def draw_configure():
     window.clear()
     configure_text.draw()
-    cfg_sin_clock_source.draw()
-    cfg_toggles_batch.draw()
-    cfg_sin_self_connect_mode.draw()
     cfg_integers_batch.draw()
-    cfg_actions_batch.draw()
+    btns.batch.draw()
+    cfg_engine_labels.draw()
+
 
 @window.event
 def on_draw():
@@ -817,40 +749,6 @@ def on_dbus_error(msg):
     if 'org.freedesktop.DBus.Error.NoReply' in msg:
         dbus_reconnect()
 
-@cancel_btn.event
-def on_press(btn, *args):
-    navigation.to_main()
-@reset_btn.event
-def on_press(btn, *args):
-    engine_features['clock-source']['retter']()
-    engine_features['self-connect-mode']['retter']()
-    for feat_name, thing in cfg_toggles.items():
-        engine_features[feat_name]['retter']()
-    # TODO: forget about all the .modified on reset
-    navigation.to_main()
-@save_btn.event
-def on_press(btn, *args):
-    if cfg_sin_clock_source.modified:
-        try:
-            engine_features['clock-source']['setter'](
-                dbus.UInt32(cfg_sin_clock_source.value['value'])
-            )
-            cfg_sin_clock_source.modified = False
-        except dbus.exceptions.DBusException as exc:
-            msg = f'Error setting up engine parameter "clock-source"\n{exc}'
-            on_error(msg)
-    for feat_name, thing in cfg_toggles.items():
-        btn = thing['btn']
-        if btn.modified:
-            print(f'set engine.{feat_name}: {btn._pressed}')
-            engine_features[feat_name]['setter'](dbus.Boolean(btn._pressed))
-    if cfg_sin_self_connect_mode.modified:
-        #print(type(cfg_sin_self_connect_mode.value['value']))
-        engine_features['self-connect-mode']['setter'](
-            cfg_sin_self_connect_mode.value['value']
-        )
-        cfg_sin_self_connect_mode.modified = False
-    navigation.to_main()
 
 @window.event
 def on_resize(x, y):
@@ -870,30 +768,18 @@ def on_resize(x, y):
     buffer_size_status_val.y = status_y(4)
     sr_status_val.y = status_y(5)
     bl_status_val.y = status_y(6)
-    start_status_btn.x = status_btn_x()
-    start_status_btn.y = status_btn_y(0)
-    start_status_btn_label.x = status_btnl_x()
-    start_status_btn_label.y = status_btnl_y(0)
-    stop_status_btn.x = status_btn_x()
-    stop_status_btn.y = status_btn_y(1)
-    stop_status_btn_label.x = status_btnl_x()
-    stop_status_btn_label.y = status_btnl_y(1)
-    force_restart_status_btn.x = status_btn_x()
-    force_restart_status_btn.y = status_btn_y(2)
-    force_restart_status_btn_label.x = status_btnl_x()
-    force_restart_status_btn_label.y = status_btnl_y(2)
-    reset_xruns_status_btn.x = status_btn_x()
-    reset_xruns_status_btn.y = status_btn_y(3)
-    reset_xruns_status_btn_label.x = status_btnl_x()
-    reset_xruns_status_btn_label.y = status_btnl_y(3)
-    switch_master_status_btn.x = status_btn_x()
-    switch_master_status_btn.y = status_btn_y(4)
-    switch_master_status_btn_label.x = status_btnl_x()
-    switch_master_status_btn_label.y = status_btnl_y(4)
-    configure_status_btn.x = status_btn_x()
-    configure_status_btn.y = status_btn_y(6)
-    configure_status_btn_label.x = status_btnl_x()
-    configure_status_btn_label.y = status_btnl_y(6)
+    start_status_btn.position = status_btn_x(), status_btn_y(0)
+    start_status_btn_label.position = status_btnl_x(), status_btnl_y(0), 1
+    stop_status_btn.position = status_btn_x(), status_btn_y(1)
+    stop_status_btn_label.position = status_btnl_x(), status_btnl_y(1), 1
+    force_restart_status_btn.position = status_btn_x(), status_btn_y(2)
+    force_restart_status_btn_label.position = status_btnl_x(), status_btnl_y(2), 1
+    reset_xruns_status_btn.position = status_btn_x(), status_btn_y(3)
+    reset_xruns_status_btn_label.position = status_btnl_x(), status_btnl_y(3), 1
+    switch_master_status_btn.position = status_btn_x(), status_btn_y(4)
+    switch_master_status_btn_label.position = status_btnl_x(), status_btnl_y(4), 1
+    configure_status_btn.position = status_btn_x(), status_btn_y(6)
+    configure_status_btn_label.position = status_btnl_x(), status_btnl_y(6), 1
 
 once = True
 while once:
@@ -901,6 +787,7 @@ while once:
     try:
         # famerate is also for dbus polling
         #pyglet.app.run(.2)  # why should you redraw this thing @60Hz?
+        navigation.to_main()
         pyglet.app.run(.05)  # why should you redraw this thing @60Hz?
         # a redraw each 100ms (10Hz) seems even too fast to me
         # actually changed to 5 times per second.
