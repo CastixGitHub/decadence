@@ -476,11 +476,14 @@ class SinScreens(RWidgetBase):
         self.batch = batch or pyglet.graphics.Batch()
         self.group = group
 
-    def add(self, screen_name, *args, cls=SinButton, **kwargs):
-        self._buttons.setdefault(screen_name, []).append(
-            (ref := cls(self._cls_sin_buttons, *args, **kwargs))
-        )
-        return ref
+    def add(self, screen_names, *args, cls=SinButton, **kwargs):
+        new = cls(self._cls_sin_buttons, *args, **kwargs)
+        for screen_name in (
+            screen_names.split('|') if '|' in screen_names
+            else [screen_names]
+        ):
+            self._buttons.setdefault(screen_name, []).append(new)
+        return new
 
     def set_active(self, screen_name):
         # provides exclusivity across screens

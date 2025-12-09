@@ -1,4 +1,7 @@
 # TODO: manage a2j pulse2j etc
+#      modprobe dns-aloop
+#      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
+#      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
 import pyglet
 from pyglet.window import Window
 from pyglet.text import Label
@@ -109,22 +112,30 @@ for evt_name in ('on_mouse_leave', 'on_mouse_release'):
 # drawing disorder and order
 batch_status = pyglet.graphics.Batch()
 batch_status_btnl = pyglet.graphics.Batch()
+configuring_what_label_batch = pyglet.graphics.Batch()
 
 btns = SinScreens(window)
 class Navigation:
     def to_main(self):
-        global window, btns, cfg_integers
+        global window, btns, cfg_engine_integers
         self.name = 'main'
         btns.set_active('main')
-        for feat in cfg_integers.values():
+        for feat in cfg_engine_integers.values():
             window.remove_handlers(feat['integer_entry'])
 
     def to_engine(self):
-        global window, btns, cfg_integers
+        global window, btns, cfg_engine_integers
         self.name = 'engine'
         btns.set_active('engine')
-        for feat in cfg_integers.values():
+        for feat in cfg_engine_integers.values():
             window.push_handlers(feat['integer_entry'])
+
+    def to_driver(self):
+        global window, btns, cfg_engine_integers
+        self.name = 'driver'
+        btns.set_active('driver')
+        for feat in cfg_engine_integers.values():
+            window.remove_handlers(feat['integer_entry'])
 
 
 navigation = Navigation()
@@ -319,22 +330,6 @@ configure_status_btn = btns.add(
     cls=MainButton,
 )
 
-# configure UI elements
-configure_text = Label(
-    'Configure',
-    anchor_x='center', x=welcome_x(), y=welcome_y(),
-    font_size=20,
-)
-checkboxes = ('Realtime', 'Temporary', 'Verbose')
-# better to get those strings from dbus
-#sin_self_connect = (
-#    "Don't restrict self connect requests",
-#    "Fail self connect requests to external ports only",
-#    "Ignore self connect requests to external ports only",
-#    "Fail all self connect requests",
-#    "Ignore all self connect requests",
-#)
-
 def force_restart():
     try:
         print('killing jack: ', d_jack.Exit())
@@ -376,6 +371,14 @@ def get_info():  # through dbus
         dsp_status_val.text = msg
         server_status_val.text = 'Stopped'\
             if 'ServerNotRunning' in msg else 'Unknown'
+
+# configure UI elements
+configure_text = Label(
+    'Configure',
+    anchor_x='left', x=15, y=welcome_y(),
+    font_size=20,
+)
+
 
 def outline_config(w):
     consts = None
@@ -539,13 +542,13 @@ class IntegerEntry(TextEntry):
         # print('on_text', self, text)
         # this thing is called on all the instances
 
-cfg_integers_batch = pyglet.graphics.Batch()
+cfg_engine_integers_batch = pyglet.graphics.Batch()
 i = 0
-cfg_integers = {}
+cfg_engine_integers = {}
 for feat_name, feat in engine_features.items():
     if (feat['is_uint32'] or feat['is_int32']) and feat_name != 'clock-source':
         i += 1
-        cfg_integers[feat_name] = {
+        cfg_engine_integers[feat_name] = {
             'integer_entry': IntegerEntry(
                 str(int(feat['getter']()[2])),
                 x=cfg_int_x(i), y=cfg_int_y(i),
@@ -553,7 +556,7 @@ for feat_name, feat in engine_features.items():
                 color=(0xcc, 0xcc, 0xcc, 0xff),
                 text_color=(0x00, 0x00, 0x00, 0xff),
                 caret_color=(0x00, 0x00, 0x00, 0xff),
-                batch=cfg_integers_batch,
+                batch=cfg_engine_integers_batch,
             ),
             'label': Label(
                 feat_name.replace('-', ' ').capitalize()
@@ -565,6 +568,10 @@ for feat_name, feat in engine_features.items():
             ),
         }
 
+# END of engine screen
+
+
+# Both engine screen and driver screen
 class CancelBtn(SinButton):
     def on_press(_):
         navigation.to_main()
@@ -576,7 +583,7 @@ class ResetBtn(SinButton):
         for feat_name, thing in cfg_toggles.items():
             engine_features[feat_name]['retter']()
             thing['btn'].modified = False
-        for feat_name, thing in cfg_integers.items():
+        for feat_name, thing in cfg_engine_integers.items():
             engine_features[feat_name]['retter']()
             thing['integer_entry'].modified = False
         clk_btn.mark_group_as_not_modified()
@@ -606,19 +613,19 @@ class SaveBtn(SinButton):
                 print(f'set engine.{feat_name}: {btn._pressed}')
                 engine_features[feat_name]['setter'](dbus.Boolean(btn._pressed))
                 btn.modified = False
-        for feat_name, thing in cfg_integers.items():
+        for feat_name, thing in cfg_engine_integers.items():
             if (te := thing['integer_entry']).modified:
                 print(f'set (int) engine.{feat_name}: {te.value}')
                 te.modified = False
         navigation.to_main()
 
 cancel_btn = btns.add(
-    'engine',
+    'engine|driver',
     Label(
         'Back',
         x=cfg_action_x(0) + 6, y=cfg_action_y() - btn_h + 4,
         font_name='monospace', color=BLACK,
-        batch=cfg_engine_labels,
+        batch=configuring_what_label_batch,
     ),
     x=cfg_action_x(0), y=cfg_action_y(),
     size=(btn_w, btn_h),
@@ -626,12 +633,12 @@ cancel_btn = btns.add(
     cls=CancelBtn,
 )
 reset_btn = btns.add(
-    'engine',
+    'engine|driver',
     Label(
         'Reset',
         x=cfg_action_x(1) + 6, y=cfg_action_y() - btn_h + 4,
         font_name='monospace', color=BLACK,
-        batch=cfg_engine_labels,
+        batch=configuring_what_label_batch,
     ),
     x=cfg_action_x(1), y=cfg_action_y(),
     size=(btn_w, btn_h),
@@ -639,18 +646,61 @@ reset_btn = btns.add(
     cls=ResetBtn,
 )
 save_btn = btns.add(
-    'engine',
+    'engine|driver',
     Label(
         'Save',
         x=cfg_action_x(2) + 6, y=cfg_action_y() - btn_h + 4,
         font_name='monospace', color=BLACK,
-        batch=cfg_engine_labels,
+        batch=configuring_what_label_batch,
     ),
     x=cfg_action_x(2), y=cfg_action_y(),
     size=(btn_w, btn_h),
     is_on=True, is_radio=False, is_enabled=True,
     cls=SaveBtn,
 )
+
+configuring_engine = btns.add(
+    'engine|driver',
+    Label(
+        'Jack Engine',
+        x=150 + 25, y=welcome_y(),
+        font_name='monospace',
+        batch=configuring_what_label_batch,
+    ),
+    x=150, y=welcome_y() + btn_h,
+    size=25,
+    is_on=True, is_radio='configuring', is_enabled=True,
+)
+@configuring_engine.event
+def after_press(self):
+    navigation.to_engine()
+
+configuring_driver = btns.add(
+    'engine|driver',
+    Label(
+        'ALSA Driver',
+        x=300 + 25, y=welcome_y(),
+        font_name='monospace',
+        batch=configuring_what_label_batch,
+    ),
+    x=300, y=welcome_y() + btn_h,
+    size=25,
+    is_on=False, is_radio='configuring', is_enabled=True,
+)
+@configuring_driver.event
+def after_press(self):
+    navigation.to_driver()
+
+# monkeypatch set_active to share some buttons across screens
+def patch_set_active(self, screen_name):
+    for name, buttons in self._buttons.items():
+        for btn in buttons:
+            if btn in (save_btn, reset_btn, cancel_btn, configuring_engine, configuring_driver):
+                btn.is_active = screen_name in ('engine', 'driver')
+                continue
+            btn.is_active = name == screen_name
+    self._cls_sin_buttons.populate(self.batch, self.group)
+btns.set_active = partial(patch_set_active, btns)
 
 def update_engine_gui_state_clock_selection():
     # we receive 0 1 2 instead of c h s
@@ -703,7 +753,7 @@ def update_engine_gui_booleans():
 
 def update_engine_gui_integers():
     #return
-    for feat_name, thing in cfg_integers.items():
+    for feat_name, thing in cfg_engine_integers.items():
         if not thing['integer_entry'].modified and not thing['integer_entry'].focus:
             thing['integer_entry'].value = str(int(engine_features[feat_name]['getter']()[2]))
 
@@ -718,6 +768,9 @@ def update_engine_gui_state():
     update_engine_gui_booleans()
     update_engine_gui_integers()
 
+def update_driver_gui_state():
+    ...
+
 def draw():
     window.clear()
     welcome.draw()
@@ -728,10 +781,18 @@ def draw():
 def draw_configure():
     window.clear()
     configure_text.draw()
-    cfg_integers_batch.draw()
+    cfg_engine_integers_batch.draw()
     btns.batch.draw()
     cfg_engine_labels.draw()
+    configuring_what_label_batch.draw()
 
+def draw_configure_driver():
+    window.clear()
+    configure_text.draw()
+    #cfg_driver_integers_batch.draw()
+    btns.batch.draw()
+    #cfg_driver_labels.draw()
+    configuring_what_label_batch.draw()
 
 @window.event
 def on_draw():
@@ -742,6 +803,11 @@ def on_draw():
         case 'engine':
             update_engine_gui_state()
             draw_configure()
+        case 'driver':
+            update_driver_gui_state()
+            draw_configure_driver()
+        case _:
+            assert False, f'how to draw {navigation.name}?'
 
 def on_dbus_error(msg):
     print(msg, file=stderr)
