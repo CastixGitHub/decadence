@@ -1,14 +1,17 @@
-# TODO: manage a2j pulse2j etc
-#      modprobe dns-aloop
-#      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
-#      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
 import pyglet
 from pyglet.window import Window
 from pyglet.text import Label
 from pyglet.gui import TextEntry
+from configparser import ConfigParser
 from functools import partial
-from subprocess import getoutput
+from subprocess import check_output, CalledProcessError
+from multiprocessing import Process
+from threading import Thread
+from pathlib import Path
+from os import access, F_OK
 from sys import stderr
+import re
+
 
 from glsl_button import SinScreens, SinButton
 
@@ -25,10 +28,25 @@ def dbus_reconnect():
         "org.jackaudio.service",
         "/org/jackaudio/Controller"
     )
-    #patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
+    patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
     jackcfg = dbus.Interface(d_jack, "org.jackaudio.Configure")
 dbus_reconnect()
 
+global_config = ConfigParser()
+config_path = Path('~/.config/decadence.ini').expanduser()
+if access(config_path, F_OK):
+    global_config.read(config_path)
+else:
+    global_config.read_dict({
+        'bridges': {
+            'channels': 2,
+            'tool': 'jack_examples',
+            'autostart': False,
+        },
+    })
+def write_global_config():
+    with open(config_path.expanduser(), 'w') as config_file:
+        global_config.write(config_file)
 
 window = pyglet.window.Window(caption='decadence', width=600, height=500)
 # i3wm users: $mod+Shift+space to toggle floating to tiling
@@ -270,7 +288,7 @@ start_status_btn = btns.add(
     )),
     x=status_btn_x(), y=status_btn_y(0),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=MainButton,
 )
 stop_status_btn = btns.add(
@@ -278,12 +296,12 @@ stop_status_btn = btns.add(
     (stop_status_btn_label := Label(
         'Stop',
         x=status_btnl_x(), y=status_btnl_y(1),
-        font_name='monospace', font_size=10, color=BLACK,
+        font_name='monospace', font_size=10, color=YELL,
         batch=batch_status_btnl,
     )),
     x=status_btn_x(), y=status_btn_y(1),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=MainButton,
 )
 force_restart_status_btn = btns.add(
@@ -296,7 +314,7 @@ force_restart_status_btn = btns.add(
     )),
     x=status_btn_x(), y=status_btn_y(2),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=MainButton,
 )
 reset_xruns_status_btn = btns.add(
@@ -304,12 +322,12 @@ reset_xruns_status_btn = btns.add(
     (reset_xruns_status_btn_label := Label(
         'X ok',
         x=status_btnl_x(), y=status_btnl_y(3),
-        font_name='monospace', font_size=10, color=BLACK,
+        font_name='monospace', font_size=10,
         batch=batch_status_btnl,
     )),
     x=status_btn_x(), y=status_btn_y(3),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=MainButton,
 )
 switch_master_status_btn = btns.add(
@@ -317,12 +335,12 @@ switch_master_status_btn = btns.add(
     (switch_master_status_btn_label := Label(
         'S Mast',
         x=status_btnl_x(), y=status_btnl_y(4),
-        font_name='monospace', font_size=10, color=BLACK,
+        font_name='monospace', font_size=10,
         batch=batch_status_btnl,
     )),
     x=status_btn_x(), y=status_btn_y(4),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=MainButton,
 )
 configure_status_btn = btns.add(
@@ -330,14 +348,174 @@ configure_status_btn = btns.add(
     (configure_status_btn_label := Label(
         'Config',
         x=status_btnl_x(), y=status_btnl_y(6),
-        font_name='monospace', font_size=10, color=BLACK,
+        font_name='monospace', font_size=10,
         batch=batch_status_btnl,
     )),
     x=status_btn_x(), y=status_btn_y(6),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=False, is_enabled=True,
     cls=MainButton,
 )
+
+cfg_status_bridge_label = Label(
+    'ALSA2JACK:',
+    x=15, y=status_btn_y(7) - 15,
+    font_name='monospace',
+    batch=batch_status_btnl,
+)
+bridge_tool = btns.add(
+    'main',
+    (cfg_status_dridge_label0 := Label(
+        'jack examples',
+        x=145, y=status_btn_y(7) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    )),
+    x=125, y=status_btn_y(7),
+    size=20,
+    is_on=global_config.get('bridges', 'tool') == 'jack_examples',
+    is_radio='bridge-tool', is_enabled=True,
+)
+@bridge_tool.event
+def after_press(btn):
+    global_config.set('bridges', 'tool', 'jack_examples')
+    write_global_config()
+bridge_tool = btns.add(
+    'main',
+    (cfg_status_dridge_label0 := Label(
+        'zita',
+        x=320, y=status_btn_y(7) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    )),
+    x=300, y=status_btn_y(7),
+    size=20,
+    is_on=global_config.get('bridges', 'tool') == 'zita_a2j',
+    is_radio='bridge-tool', is_enabled=False,  # TODO: enable zita
+)
+@bridge_tool.event
+def after_press(btn):
+    global_config.set('bridges', 'tool', 'zita_a2j')
+    write_global_config()
+bridge_autostart = btns.add(
+    'main',
+    (yet_another_label := Label(
+        'Start alongside jack',
+        x=120, y=status_btn_y(8) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    )),
+    size=20,
+    x=100, y=status_btn_y(8),
+    is_on=global_config.getboolean('bridges', 'autostart'),
+    is_radio=False, is_enabled=True,
+)
+@bridge_autostart.event
+def after_press(btn):
+    global_config.set('bridges', 'autostart', 'true' if btn._pressed else 'false')
+    write_global_config()
+
+aloop_started_btn = btns.add(
+    'main',
+    (aloop_started_lbl := Label(
+        'Started',
+        x=360, y=status_btn_y(8) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    )),
+    size=20,
+    x=340, y=status_btn_y(8),
+    is_on=False, is_radio=False, is_enabled=False,
+)
+aloop_connected_btn = btns.add(
+    'main',
+    (aloop_connected_lbl := Label(
+        'Connected',  # TODO: this one needs more love
+        x=450, y=status_btn_y(8) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    )),
+    size=20,
+    x=430, y=status_btn_y(8),
+    is_on=False, is_radio=False, is_enabled=False,
+)
+
+def check_kernel_SND_ALOOP():
+    if check_output(['grep', '-l', '-e', "snd_aloop", '/proc/kallsyms']):
+        return True # module loaded
+    error_dialog('SND_ALOOP',
+        'You need to check SND_ALOOP kernel config.\n'
+        "Try `modprobe snd_aloop` if that's a module"
+    )
+    return False
+
+def aloop_started():
+    all_ports = patchbay.GetAllPorts()
+    in_started = [str(x) for x in all_ports if 'alsa2jack' in x]
+    out_started = [str(x) for x in all_ports if 'jack2alsa' in x]
+    aloop_started_btn.toggle(True)
+    return in_started and out_started
+
+def start_aloop():
+    SR = d_jack.GetSampleRate()
+    PS = d_jack.GetBufferSize()
+    CH = global_config.getint("bridges", "channels")
+    env = {
+        'JACK_SAMPLE_RATE': f'{SR:d}',
+        'JACK_PERIOD_SIZE': f'{PS:d}',
+    }
+    def target_in():
+        check_output([
+            '/usr/bin/alsa_in',
+            '-d', 'cloop',  # capture loop
+            f'{SR:d}',
+            '-p',
+            f'{PS:d}',
+            "-j", "alsa2jack",
+            "-c", f'{CH:d}',
+        ], env=env)
+    Process(target=target_in).start()
+    def target_out():
+        check_output([
+            '/usr/bin/alsa_out',
+            '-d', 'ploop',  # playback loop
+            f'{SR:d}',
+            '-p',
+            f'{PS:d}',
+            "-j", "jack2alsa",
+            "-c", f'{CH:d}',
+        ], env=env)
+    Process(target=target_out).start()
+
+def connect_aloop():
+    def _connect_aloop():
+        while not aloop_started():
+            pyglet.app.event_loop.sleep(0.05)
+        for chan in range(1, global_config.getint('bridges', 'channels') + 1):
+            patchbay.ConnectPortsByName(
+                'alsa2jack', f'capture_{chan}',
+                'system', f'playback_{chan}',
+            )
+            patchbay.ConnectPortsByName(
+                'system', f'capture_{chan}',
+                'jack2alsa', f'playback_{chan}',
+            )
+        aloop_connected_btn.toggle(True)
+    Thread(target=_connect_aloop).start()
+
+def come_on_start():
+    d_jack.StartServer()
+    # TODO: manage a2j pulse2j etc
+    #      modprobe snd-aloop
+    #      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
+    #      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
+    if global_config.getboolean('bridges', 'autostart'):
+        if global_config.get('bridges', 'tool') == 'jack_examples':
+            if not aloop_started():
+                if check_kernel_SND_ALOOP():
+                    start_aloop()
+            connect_aloop()
+
 
 def force_restart():
     try:
@@ -351,16 +529,15 @@ def force_restart():
     # so we can reconnect
     GDbus.close()
     dbus_reconnect()
-    print('starting jack: ', d_jack.StartServer())
+    print('starting jack: ', come_on_start())
 
 dbus_buttons = {
-    start_status_btn: (lambda: d_jack.StartServer()),
-    stop_status_btn: (lambda: d_jack.StopServer()),
+    start_status_btn: come_on_start,
+    stop_status_btn: d_jack.StopServer,
     force_restart_status_btn: force_restart,
-    reset_xruns_status_btn: (lambda: d_jack.ResetXruns()),
-    switch_master_status_btn: (lambda: d_jack.SwitchMaster()),
+    reset_xruns_status_btn: d_jack.ResetXruns,
+    switch_master_status_btn: d_jack.SwitchMaster,
 }
-
 
 
 def get_info():  # through dbus
@@ -482,7 +659,6 @@ for feat_name, feat in engine_features.items():
 
 cfg_sin_clock_source_feat = engine_features['clock-source']
 # ... 'Clocksource type : c(ycle) | h(pet) | s(ystem).'
-import re
 cs_re = re.compile(r'\s*([a-zA-Z])(\([a-zA-z]*\))\s*')
 
 cfg_sin_clock_source_cfg = {
@@ -670,9 +846,10 @@ i += 2
 # TODO: one needs to restart the application to see new soundcards
 def _get_alsa_device_list(playback):
     result = [('none', 'none')]
-    out = getoutput("env LANG=C LC_ALL=C {} -l".format(
-        'aplay' if playback else 'arecord'
-    )).split("\n")
+    out = check_output([
+        'aplay' if playback else 'arecord',
+        '-l'
+    ]).decode().split("\n")
     for line in out:
         if line.startswith('card '):
             card, device = line.split(',', 1)
@@ -906,12 +1083,12 @@ cancel_btn = btns.add(
     Label(
         'Back',
         x=cfg_action_x(0) + 6, y=cfg_action_y() - btn_h + 4,
-        font_name='monospace', color=BLACK,
+        font_name='monospace',
         batch=configuring_what_label_batch,
     ),
     x=cfg_action_x(0), y=cfg_action_y(),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=CancelBtn,
 )
 reset_btn = btns.add(
@@ -919,12 +1096,12 @@ reset_btn = btns.add(
     Label(
         'Reset',
         x=cfg_action_x(1) + 6, y=cfg_action_y() - btn_h + 4,
-        font_name='monospace', color=BLACK,
+        font_name='monospace',
         batch=configuring_what_label_batch,
     ),
     x=cfg_action_x(1), y=cfg_action_y(),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=ResetBtn,
 )
 save_btn = btns.add(
@@ -932,12 +1109,12 @@ save_btn = btns.add(
     Label(
         'Save',
         x=cfg_action_x(2) + 6, y=cfg_action_y() - btn_h + 4,
-        font_name='monospace', color=BLACK,
+        font_name='monospace',
         batch=configuring_what_label_batch,
     ),
     x=cfg_action_x(2), y=cfg_action_y(),
     size=(btn_w, btn_h),
-    is_on=True, is_radio=False, is_enabled=True,
+    is_on=False, is_radio=True, is_enabled=True,
     cls=SaveBtn,
 )
 
@@ -1214,4 +1391,7 @@ while once:
         once = True
         if 'org.freedesktop.DBus.Error.ServiceUnknown' in str(exc):
             dbus_reconnect()
+
+print("So you closed the window... Well i'm atexit")
+print("SIGINT will kill any bridge, that's on you")
 

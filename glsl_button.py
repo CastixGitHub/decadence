@@ -40,6 +40,12 @@ class SinButton(RWidgetBase):
         self.buttons.add(self)
         self.modified = False
 
+    def label_check_hit(self, x, y):
+        return (
+            self.label._x <= x <= self.label._x + self.label._content_width
+            and self.label._y <= y <= self.label._y + self.label._content_height
+        )
+
     @property
     def others(self):
         assert self.is_radio, 'missing is_radio (grouping)'
@@ -495,14 +501,21 @@ class SinScreens(RWidgetBase):
 
     def on_mouse_press(self, x, y, buttons, modifiers):
         for btn in self._cls_sin_buttons.boxes:
-            if btn._check_hit(x, y) and btn.is_active and btn.is_enabled:
+            if (
+                btn.is_active
+                and btn.is_enabled
+                and (btn._check_hit(x, y) or btn.label_check_hit(x, y))
+            ):
                 print('pressing', btn)
                 btn.on_press()
                 return
 
     def on_mouse_motion(self, x, y, dx, dy):
         for btn in self._cls_sin_buttons.boxes:
-            if btn.is_active and btn._check_hit(x, y):
+            if (
+                btn.is_active
+                and (btn._check_hit(x, y) or btn.label_check_hit(x, y))
+            ):
                 self._cls_sin_buttons.hovering = btn
                 break
         else:
