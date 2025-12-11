@@ -76,6 +76,7 @@ class SinButton(RWidgetBase):
             ):
                 btn.toggle(True)
                 return
+        raise ValueError(f"Couldn't set value {new} on {self.is_radio}")
 
     @property
     def _pressed(self):  # mimic PushButton/ToggleButton
