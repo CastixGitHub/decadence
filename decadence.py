@@ -8,7 +8,8 @@ from subprocess import check_output, CalledProcessError
 from multiprocessing import Process
 from threading import Thread
 from pathlib import Path
-from os import access, F_OK
+from os import access, F_OK, kill
+from signal import SIGINT
 from sys import stderr
 import re
 
@@ -16,13 +17,15 @@ import re
 from glsl_button import SinScreens, SinButton
 
 import dbus  # dbus-python on PyPi
+from dbus.mainloop.glib import DBusGMainLoop
 # gdbus introspect -e -d org.jackaudio.service -o /org/jackaudio/Controller
 GDbus = None
 d_jack = None
 patchbay = None
 jackcfg = None
+DBusGMainLoop(set_as_default=True)
 def dbus_reconnect():
-    global GDbus, d_jack, patchbay, jackcfg
+    global GDbus, d_jack, patchbay, jackcfg, jack_control
     GDbus = dbus.bus.BusConnection()
     d_jack = GDbus.get_object(
         "org.jackaudio.service",
@@ -31,6 +34,98 @@ def dbus_reconnect():
     patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
     jackcfg = dbus.Interface(d_jack, "org.jackaudio.Configure")
 dbus_reconnect()
+
+class Graph:  # TODO: also map IDs and handle port renaming
+    #                 but we don't need that, so...
+    def __init__(self):
+        self._version = 0
+        self._graph = None
+        self._server_started = False
+
+    def ds_server_started(self,):
+        self._server_started = True
+
+    def ds_server_stopped(self):
+        self._server_started = False
+
+    @property
+    def server_started(self):
+        if not self._server_started:
+            self._server_started = bool(d_jack.IsStarted())
+        return self._server_started
+
+    @property
+    def graph(self):
+        # one question... giving the last known means outputting the diff?
+        # I don't think so...
+        empty = [0, {}, {}]
+        if not self.server_started:
+            return self._graph or empty
+        try:
+            graph = patchbay.GetGraph(self._version)
+        except dbus.exceptions.DBusException as exc:
+            if 'org.jackaudio.Error.ServerNotRunning' in str(exc):
+                return self._graph or empty
+            elif 'org.jackaudio.Error.InvalidArgs' in str(exc):
+                self._version = 0
+                return self.graph
+            raise
+        if int(graph[0]) != self._version:
+            self._version = int(graph[0])
+            self._graph = graph
+        return self._graph
+
+    def get_connections(self):
+        _connections = set()
+        for connections_a in self.graph[2]:
+            connections = connections_a[1::2]
+            connections = [
+                f'{client}:{port}'
+                for client, port in zip(connections[::2], connections[1::2])
+            ]
+            _connections |= set(zip(connections[::2], connections[1::2]))
+        connections = {}
+        for conn in _connections:
+            connections.setdefault(conn[0], []).append(conn[1])
+        return connections
+
+    def get_clients(self):
+        return {
+            str(client[1]): int(client[0])
+            for client in self.graph[1]
+        }
+
+
+    def kill(self, client_id):
+        if client_id:
+            pid = patchbay.GetClientPID(dbus.UInt64(client_id))
+            try:
+                kill(pid, SIGINT)
+                print(f'Killed {pid} with SIGINT')
+            except ProcessLookupError: ...
+
+    def get_client_id(self, client_name):
+        return self.get_clients().get(client_name)
+graph = Graph()
+patchbay.connect_to_signal(
+    'ServerStarted',
+    graph.ds_server_started,
+    "org.jackaudio.JackControl"
+)
+patchbay.connect_to_signal(
+    'ServerStopped',
+    graph.ds_server_stopped,
+    "org.jackaudio.JackControl"
+)
+
+def dbus_gi_loop():
+    from gi.repository import GLib  # pip install pygobject
+    # ewww, must use gi? we got gtk bindings then...
+    # maybe let's help dbus-python supporting more event loops
+    loop = GLib.MainLoop()
+    loop.run()
+Thread(name='dbusloop', target=dbus_gi_loop).start()
+# TODO: later make this a daemon?
 
 global_config = ConfigParser()
 config_path = Path('~/.config/decadence.ini').expanduser()
@@ -55,7 +150,14 @@ window = pyglet.window.Window(caption='decadence', width=600, height=500)
 #wel = pyglet.window.event.WindowEventLogger()
 #window.push_handlers(wel)
 
+has_error = False
+
 def error_dialog(msg, title='Error'):
+    global has_error
+    if has_error:
+        print(msg, file=stderr)
+        return # avoid infinite error msgs
+    has_error = True
     w = Window(
         caption=title,
         style=Window.WINDOW_STYLE_DIALOG,
@@ -63,6 +165,7 @@ def error_dialog(msg, title='Error'):
         height=200,
     )
     b = pyglet.graphics.Batch()
+
     @w.event
     def on_draw():
         w.clear()
@@ -78,6 +181,10 @@ def error_dialog(msg, title='Error'):
             if len(line) < cxline:
                 break
         b.draw()
+
+    @w.event
+    def on_close():
+        has_error = False
 
 btn_w, btn_h = 60, 20
 def welcome_x(): return window.width // 2
@@ -391,7 +498,11 @@ bridge_tool = btns.add(
     x=300, y=status_btn_y(7),
     size=20,
     is_on=global_config.get('bridges', 'tool') == 'zita_a2j',
-    is_radio='bridge-tool', is_enabled=False,  # TODO: enable zita
+    is_radio='bridge-tool', is_enabled=False,
+    # TODO: Can i have a zita?
+    #       Need to also kill alsa_in/out once checked
+    #       Better do so after confirmation dialog
+    #       Then uncheck started/connected
 )
 @bridge_tool.event
 def after_press(btn):
@@ -415,6 +526,33 @@ def after_press(btn):
     global_config.set('bridges', 'autostart', 'true' if btn._pressed else 'false')
     write_global_config()
 
+def aloop_started(has_btn=True):
+    def _toggle(val: bool):
+        if has_btn:
+            aloop_started_btn.toggle(val)
+        return val
+    if not graph.server_started:
+        return _toggle(False)
+    try:
+        all_ports = patchbay.GetAllPorts()
+    except Exception as exc:
+        if 'org.jackaudio.Error.ServerNotRunning' in str(exc):
+            return _toggle(False)
+        raise
+    in_started = [str(x) for x in all_ports if 'alsa2jack' in x]
+    out_started = [str(x) for x in all_ports if 'jack2alsa' in x]
+    return _toggle(in_started and out_started)
+
+def aloop_connected(has_btn=True):
+    connections = graph.get_connections()
+    connected = (
+        'alsa2jack:capture_1' in connections
+        and 'jack2alsa:playback_1' in connections.get('system:capture_1', [])
+    )
+    if has_btn:
+        aloop_connected_btn.toggle(connected)
+    return connected
+
 aloop_started_btn = btns.add(
     'main',
     (aloop_started_lbl := Label(
@@ -425,19 +563,19 @@ aloop_started_btn = btns.add(
     )),
     size=20,
     x=340, y=status_btn_y(8),
-    is_on=False, is_radio=False, is_enabled=False,
+    is_on=aloop_started(False), is_radio=False, is_enabled=False,
 )
 aloop_connected_btn = btns.add(
     'main',
     (aloop_connected_lbl := Label(
-        'Connected',  # TODO: this one needs more love
+        'Connected',
         x=450, y=status_btn_y(8) - 15,
         font_name='monospace',
         batch=batch_status_btnl,
     )),
     size=20,
     x=430, y=status_btn_y(8),
-    is_on=False, is_radio=False, is_enabled=False,
+    is_on=aloop_connected(False), is_radio=False, is_enabled=False,
 )
 
 def check_kernel_SND_ALOOP():
@@ -449,14 +587,10 @@ def check_kernel_SND_ALOOP():
     )
     return False
 
-def aloop_started():
-    all_ports = patchbay.GetAllPorts()
-    in_started = [str(x) for x in all_ports if 'alsa2jack' in x]
-    out_started = [str(x) for x in all_ports if 'jack2alsa' in x]
-    aloop_started_btn.toggle(True)
-    return in_started and out_started
-
+aloop_in = None
+aloop_out = None
 def start_aloop():
+    global aloop_in, aloop_out
     SR = d_jack.GetSampleRate()
     PS = d_jack.GetBufferSize()
     CH = global_config.getint("bridges", "channels")
@@ -465,41 +599,65 @@ def start_aloop():
         'JACK_PERIOD_SIZE': f'{PS:d}',
     }
     def target_in():
-        check_output([
-            '/usr/bin/alsa_in',
-            '-d', 'cloop',  # capture loop
-            f'{SR:d}',
-            '-p',
-            f'{PS:d}',
-            "-j", "alsa2jack",
-            "-c", f'{CH:d}',
-        ], env=env)
-    Process(target=target_in).start()
+        try:
+            check_output([
+                '/usr/bin/alsa_in',
+                '-d', 'cloop',  # capture loop
+                f'{SR:d}',
+                '-p',
+                f'{PS:d}',
+                "-j", "alsa2jack",
+                "-c", f'{CH:d}',
+            ], env=env)
+        except CalledProcessError as exc:
+            print('alsa_in died')
+    (aloop_in := Process(target=target_in)).start()
     def target_out():
-        check_output([
-            '/usr/bin/alsa_out',
-            '-d', 'ploop',  # playback loop
-            f'{SR:d}',
-            '-p',
-            f'{PS:d}',
-            "-j", "jack2alsa",
-            "-c", f'{CH:d}',
-        ], env=env)
-    Process(target=target_out).start()
+        try:
+            check_output([
+                '/usr/bin/alsa_out',
+                '-d', 'ploop',  # playback loop
+                f'{SR:d}',
+                '-p',
+                f'{PS:d}',
+                "-j", "jack2alsa",
+                "-c", f'{CH:d}',
+            ], env=env)
+        except CalledProcessError as exc:
+            print('alsa_out died')
+    (aloop_out := Process(target=target_out)).start()
+
+def aloop_stop():
+    global aloop_in, aloop_out
+    if aloop_in:
+        aloop_in.terminate()
+    if aloop_out:
+        aloop_out.terminate()
+    # but that's not enough ofc
+    graph.kill(graph.get_client_id('alsa2jack'))
+    graph.kill(graph.get_client_id('jack2alsa'))
 
 def connect_aloop():
     def _connect_aloop():
         while not aloop_started():
             pyglet.app.event_loop.sleep(0.05)
         for chan in range(1, global_config.getint('bridges', 'channels') + 1):
-            patchbay.ConnectPortsByName(
-                'alsa2jack', f'capture_{chan}',
-                'system', f'playback_{chan}',
-            )
-            patchbay.ConnectPortsByName(
-                'system', f'capture_{chan}',
-                'jack2alsa', f'playback_{chan}',
-            )
+            try:
+                patchbay.ConnectPortsByName(
+                    'alsa2jack', f'capture_{chan}',
+                    'system', f'playback_{chan}',
+                )
+            except dbus.exceptions.DBusException as exc:
+                if 'failed with 17' not in str(exc):
+                    raise  # 17 already connected
+            try:
+                patchbay.ConnectPortsByName(
+                    'system', f'capture_{chan}',
+                    'jack2alsa', f'playback_{chan}',
+                )
+            except dbus.exceptions.DBusException as exc:
+                if 'failed with 17' not in str(exc):
+                    raise  # 17 already connected
         aloop_connected_btn.toggle(True)
     Thread(target=_connect_aloop).start()
 
@@ -516,6 +674,9 @@ def come_on_start():
                     start_aloop()
             connect_aloop()
 
+def now_stop_them():
+    aloop_stop()
+    d_jack.StopServer()
 
 def force_restart():
     try:
@@ -531,9 +692,10 @@ def force_restart():
     dbus_reconnect()
     print('starting jack: ', come_on_start())
 
+
 dbus_buttons = {
     start_status_btn: come_on_start,
-    stop_status_btn: d_jack.StopServer,
+    stop_status_btn: now_stop_them,
     force_restart_status_btn: force_restart,
     reset_xruns_status_btn: d_jack.ResetXruns,
     switch_master_status_btn: d_jack.SwitchMaster,
@@ -1326,6 +1488,8 @@ def on_draw():
     match navigation.name:
         case 'main':
             get_info()
+            aloop_started()
+            aloop_connected()
             draw()
         case 'engine':
             update_engine_gui_state()
