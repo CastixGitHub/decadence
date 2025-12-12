@@ -45,6 +45,7 @@ class Graph:  # TODO: also map IDs and handle port renaming
     #                 but we don't need that, so...
     def __init__(self):
         self._version = 0
+        self._recursion_oops = 0
         self._graph = None
         self._server_started = False
 
@@ -74,7 +75,12 @@ class Graph:  # TODO: also map IDs and handle port renaming
                 return self._graph or empty
             elif 'org.jackaudio.Error.InvalidArgs' in str(exc):
                 self._version = 0
-                return self.graph
+                self._recursion_oops += 1
+                if self._recursion_oops >= 2:
+                    raise
+                g = self.graph
+                self_recursion_oops = 0
+                return g
             raise
         if int(graph[0]) != self._version:
             self._version = int(graph[0])
