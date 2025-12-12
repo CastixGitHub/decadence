@@ -709,26 +709,35 @@ def aloop_stop():
     graph.kill(graph.get_client_id('jack2alsa'))
 
 def connect_aloop():
+    def _on_error(exc):  # async
+        if 'org.freedesktop.DBus.Error.NoReply' in str(exc):
+            dbus_reconnect()
+        elif 'failed with 17' in str(exc):
+            ... # 17 already connected
+        else:
+            raise
     def _connect_aloop():
-        while not aloop_started():
-            pyglet.app.event_loop.sleep(0.05)
+        try:
+            while not aloop_started():
+                pyglet.app.event_loop.sleep(0.05)
+        except dbus.exceptions.DBusException as exc:
+            print('ERROR checking aloop_started', str(exc), file=stderr)
+            if 'org.freedesktop.DBus.Error.NoReply' in str(exc):
+                dbus_reconnect()
+                return
         for chan in range(1, global_config.getint('a2j_bridge', 'channels') + 1):
-            try:
-                patchbay.ConnectPortsByName(
-                    'alsa2jack', f'capture_{chan}',
-                    'system', f'playback_{chan}',
-                )
-            except dbus.exceptions.DBusException as exc:
-                if 'failed with 17' not in str(exc):
-                    raise  # 17 already connected
-            try:
-                patchbay.ConnectPortsByName(
-                    'system', f'capture_{chan}',
-                    'jack2alsa', f'playback_{chan}',
-                )
-            except dbus.exceptions.DBusException as exc:
-                if 'failed with 17' not in str(exc):
-                    raise  # 17 already connected
+            patchbay.ConnectPortsByName(
+                'alsa2jack', f'capture_{chan}',
+                'system', f'playback_{chan}',
+                reply_handler=lambda: ...,
+                error_handler=_on_error,
+            )
+            patchbay.ConnectPortsByName(
+                'system', f'capture_{chan}',
+                'jack2alsa', f'playback_{chan}',
+                reply_handler=lambda: ...,
+                error_handler=_on_error,
+            )
         aloop_connected_btn.toggle(True)
     Thread(target=_connect_aloop).start()
 
@@ -929,13 +938,16 @@ def get_info():  # through dbus
     except dbus.exceptions.DBusException as exc:
         msg = str(exc)
     if msg is None:
-        server_status_val.text = 'Started'
-        xruns_status_val.text = f'{d_jack.GetXruns()}'
-        buffer_size_status_val.text = f'{d_jack.GetBufferSize()} samples'
-        rt_status_val.text = 'Yes' if d_jack.IsRealtime() else 'No'
-        sr_status_val.text = f'{d_jack.GetSampleRate()} Hz'
-        bl_status_val.text = f'{d_jack.GetLatency():.2f} ms'
-    else:
+        try:
+            server_status_val.text = 'Started'
+            xruns_status_val.text = f'{d_jack.GetXruns()}'
+            buffer_size_status_val.text = f'{d_jack.GetBufferSize()} samples'
+            rt_status_val.text = 'Yes' if d_jack.IsRealtime() else 'No'
+            sr_status_val.text = f'{d_jack.GetSampleRate()} Hz'
+            bl_status_val.text = f'{d_jack.GetLatency():.2f} ms'
+        except dbus.exceptions.DBusException as exc:
+            msg = str(exc)
+    if msg is not None:
         dsp_status_val.text = msg
         server_status_val.text = 'Stopped'\
             if 'ServerNotRunning' in msg else 'Unknown'
