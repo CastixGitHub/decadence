@@ -324,6 +324,8 @@ class Navigation:
         configuring_engine.value = 'engine'
         for feat in cfg_engine_integers.values():
             window.push_handlers(feat['integer_entry'])
+        for feat in cfg_driver_integers.values():
+            window.remove_handlers(feat['integer_entry'])
 
     def to_driver(self):
         global window, btns, cfg_engine_integers
@@ -331,6 +333,8 @@ class Navigation:
         btns.set_active('driver')
         for feat in cfg_engine_integers.values():
             window.remove_handlers(feat['integer_entry'])
+        for feat in cfg_driver_integers.values():
+            window.push_handlers(feat['integer_entry'])
 
 
 navigation = Navigation()
@@ -845,11 +849,13 @@ def come_on_start():
         midid.start()
 
 def now_stop_them():
+    print('stopping a2j, a2jmidid, jack')
     aloop_stop()
     midid.stop()
     d_jack.StopServer()
 
 def force_restart():
+    now_stop_them()
     try:
         print('killing jack: ', d_jack.Exit())
         for _ in range(20):
@@ -859,7 +865,8 @@ def force_restart():
         ...  # tells didn't answer
         ...  # doesn't tell it anymore...
     # so we can reconnect
-    GDbus.close()
+    # fucc, we can't anymore
+    #GDbus.close()
     dbus_reconnect()
     print('starting jack: ', come_on_start())
 
