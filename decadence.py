@@ -833,6 +833,42 @@ midid_uniq_btn = btns.add(
     is_radio=False, is_enabled=False,
 )
 
+# next pulse2jack
+cfg_status_p2j_label = Label(
+    'Pulse2Jack:',
+    x=15, y=status_btn_y(11) - 15,
+    font_name='monospace',
+    batch=batch_status_btnl,
+)
+p2j_autostart_btn = btns.add(
+    'main',
+    Label(
+        'On Start',
+        x=145, y=status_btn_y(11) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    size=20,
+    x=125, y=status_btn_y(11),
+    is_on=False, is_radio=False, is_enabled=False,
+)
+@p2j_autostart_btn.event
+def after_press(btn):
+    global_config.set('p2j', 'autostart', 'true' if btn._pressed else 'false')
+    write_global_config()
+p2j_started_btn = btns.add(
+    'main',
+    Label(
+        'Started',
+        x=250, y=status_btn_y(11) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    size=20,
+    x=230, y=status_btn_y(11),
+    is_on=False, is_radio=False, is_enabled=False,
+)
+
 def come_on_start():
     d_jack.StartServer()
     # TODO: manage a2j pulse2j etc
