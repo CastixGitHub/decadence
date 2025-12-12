@@ -23,9 +23,10 @@ GDbus = None
 d_jack = None
 patchbay = None
 jackcfg = None
+a2jmidid = None
 DBusGMainLoop(set_as_default=True)
 def dbus_reconnect():
-    global GDbus, d_jack, patchbay, jackcfg, jack_control
+    global GDbus, d_jack, patchbay, jackcfg, jack_control, a2jmidid
     GDbus = dbus.bus.BusConnection()
     d_jack = GDbus.get_object(
         "org.jackaudio.service",
@@ -33,6 +34,11 @@ def dbus_reconnect():
     )
     patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
     jackcfg = dbus.Interface(d_jack, "org.jackaudio.Configure")
+    # yea, all of them
+    a2jmidid = dbus.Interface(
+        GDbus.get_object("org.gna.home.a2jmidid", "/"),
+        "org.gna.home.a2jmidid.control"
+    )
 dbus_reconnect()
 
 class Graph:  # TODO: also map IDs and handle port renaming
@@ -118,6 +124,53 @@ patchbay.connect_to_signal(
     "org.jackaudio.JackControl"
 )
 
+class MIDId:
+    def start(self):
+        if not a2jmidid.is_started():
+            self.enforce_config()
+            a2jmidid.start()
+        return self.is_started
+
+    def stop(self):
+        if a2jmidid.is_started():
+            a2jmidid.stop()
+        return not self.is_started
+
+    @property
+    def is_started(self):
+        res = a2jmidid.is_started()
+        self.set_started_gui(res)
+        return res
+
+    def set_started_gui(self, val):
+        global midid_started_btn
+        midid_started_btn.toggle(val)
+
+    def enforce_config(self):
+        a2jmidid.set_disable_port_uniqueness(
+            not global_config.getboolean('a2jmidid', 'port_uniqueness')
+        )
+        a2jmidid.set_hw_export(
+            global_config.getboolean('a2jmidid', 'export_hw')
+        )
+
+    def ds_bridge_started(self):
+        self.set_started_gui(True)
+
+    def ds_bridge_stopped(self):
+        self.set_started_gui(False)
+midid = MIDId()
+a2jmidid.connect_to_signal(
+    'bridge_started',
+    midid.ds_bridge_started,
+    "org.gna.home.a2jmidid.control"
+)
+a2jmidid.connect_to_signal(
+    'bridge_stopped',
+    midid.ds_bridge_stopped,
+    "org.gna.home.a2jmidid.control"
+)
+
 def dbus_gi_loop():
     from gi.repository import GLib  # pip install pygobject
     # ewww, must use gi? we got gtk bindings then...
@@ -133,11 +186,19 @@ if access(config_path, F_OK):
     global_config.read(config_path)
 else:
     global_config.read_dict({
-        'bridges': {
+        'a2j_bridge': {
+            'autostart': False,
             'channels': 2,
             'tool': 'jack_examples',
-            'autostart': False,
         },
+        'a2jmidid': {
+            'autostart': False,
+            'export_hw': False,
+            'port_uniqueness': False,
+            # 'note_filtering': ... # -n     do not filter note on
+            # whut? not exposed through dbus anyway...
+            # actually do we need to store them?
+        }
     })
 def write_global_config():
     with open(config_path.expanduser(), 'w') as config_file:
@@ -474,18 +535,18 @@ bridge_tool = btns.add(
     'main',
     (cfg_status_dridge_label0 := Label(
         'jack examples',
-        x=145, y=status_btn_y(7) - 15,
+        x=140, y=status_btn_y(7) - 15,
         font_name='monospace',
         batch=batch_status_btnl,
     )),
-    x=125, y=status_btn_y(7),
+    x=120, y=status_btn_y(7),
     size=20,
-    is_on=global_config.get('bridges', 'tool') == 'jack_examples',
+    is_on=global_config.get('a2j_bridge', 'tool') == 'jack_examples',
     is_radio='bridge-tool', is_enabled=True,
 )
 @bridge_tool.event
 def after_press(btn):
-    global_config.set('bridges', 'tool', 'jack_examples')
+    global_config.set('a2j_bridge', 'tool', 'jack_examples')
     write_global_config()
 bridge_tool = btns.add(
     'main',
@@ -497,7 +558,7 @@ bridge_tool = btns.add(
     )),
     x=300, y=status_btn_y(7),
     size=20,
-    is_on=global_config.get('bridges', 'tool') == 'zita_a2j',
+    is_on=global_config.get('a2j_bridge', 'tool') == 'zita_a2j',
     is_radio='bridge-tool', is_enabled=False,
     # TODO: Can i have a zita?
     #       Need to also kill alsa_in/out once checked
@@ -506,24 +567,24 @@ bridge_tool = btns.add(
 )
 @bridge_tool.event
 def after_press(btn):
-    global_config.set('bridges', 'tool', 'zita_a2j')
+    global_config.set('a2j_bridge', 'tool', 'zita_a2j')
     write_global_config()
 bridge_autostart = btns.add(
     'main',
     (yet_another_label := Label(
-        'Start alongside jack',
+        'On Start',
         x=120, y=status_btn_y(8) - 15,
         font_name='monospace',
         batch=batch_status_btnl,
     )),
     size=20,
     x=100, y=status_btn_y(8),
-    is_on=global_config.getboolean('bridges', 'autostart'),
+    is_on=global_config.getboolean('a2j_bridge', 'autostart'),
     is_radio=False, is_enabled=True,
 )
 @bridge_autostart.event
 def after_press(btn):
-    global_config.set('bridges', 'autostart', 'true' if btn._pressed else 'false')
+    global_config.set('a2j_bridge', 'autostart', 'true' if btn._pressed else 'false')
     write_global_config()
 
 def aloop_started(has_btn=True):
@@ -557,24 +618,24 @@ aloop_started_btn = btns.add(
     'main',
     (aloop_started_lbl := Label(
         'Started',
-        x=360, y=status_btn_y(8) - 15,
+        x=250, y=status_btn_y(8) - 15,
         font_name='monospace',
         batch=batch_status_btnl,
     )),
     size=20,
-    x=340, y=status_btn_y(8),
+    x=230, y=status_btn_y(8),
     is_on=aloop_started(False), is_radio=False, is_enabled=False,
 )
 aloop_connected_btn = btns.add(
     'main',
     (aloop_connected_lbl := Label(
         'Connected',
-        x=450, y=status_btn_y(8) - 15,
+        x=350, y=status_btn_y(8) - 15,
         font_name='monospace',
         batch=batch_status_btnl,
     )),
     size=20,
-    x=430, y=status_btn_y(8),
+    x=330, y=status_btn_y(8),
     is_on=aloop_connected(False), is_radio=False, is_enabled=False,
 )
 
@@ -593,7 +654,7 @@ def start_aloop():
     global aloop_in, aloop_out
     SR = d_jack.GetSampleRate()
     PS = d_jack.GetBufferSize()
-    CH = global_config.getint("bridges", "channels")
+    CH = global_config.getint("a2j_bridge", "channels")
     env = {
         'JACK_SAMPLE_RATE': f'{SR:d}',
         'JACK_PERIOD_SIZE': f'{PS:d}',
@@ -641,7 +702,7 @@ def connect_aloop():
     def _connect_aloop():
         while not aloop_started():
             pyglet.app.event_loop.sleep(0.05)
-        for chan in range(1, global_config.getint('bridges', 'channels') + 1):
+        for chan in range(1, global_config.getint('a2j_bridge', 'channels') + 1):
             try:
                 patchbay.ConnectPortsByName(
                     'alsa2jack', f'capture_{chan}',
@@ -661,21 +722,131 @@ def connect_aloop():
         aloop_connected_btn.toggle(True)
     Thread(target=_connect_aloop).start()
 
+# next a2jmidid
+
+cfg_status_a2jmidid_label = Label(
+    'A2Jmidid:',
+    x=15, y=status_btn_y(9) - 15,
+    font_name='monospace',
+    batch=batch_status_btnl,
+)
+class EHWBtn(SinButton):
+    def on_press(btn):
+        global_config.set('a2jmidid', 'export_hw', 'true' if not btn._pressed else 'false'),
+        write_global_config()
+        if not midid.is_started:
+            a2jmidid.set_hw_export(not btn._pressed)
+            super().on_press() # then the toggle ofc (hence not)
+a2jmidid_export_hw_btn = btns.add(
+    'main',
+    Label(
+        'Export HW',
+        x=140, y=status_btn_y(9) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    x=120, y=status_btn_y(9),
+    size=20,
+    is_on=global_config.getboolean('a2jmidid', 'export_hw'),
+    is_radio=False, is_enabled=True,
+    cls=EHWBtn,
+)
+
+class PortUniqBtn(SinButton):
+    def on_press(btn):
+        global_config.set('a2jmidid', 'port_uniqueness', 'true' if not btn._pressed else 'false'),
+        # not ofc
+        write_global_config()
+        if not midid.is_started:
+            a2jmidid.set_disable_port_uniqueness(btn._pressed)
+            super().on_press()
+a2jmidid_uniqueness_btn = btns.add(
+    'main',
+    Label(
+        'Port Uniqueness',
+        x=270, y=status_btn_y(9) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    x=250, y=status_btn_y(9),
+    size=20,
+    is_on=global_config.getboolean('a2jmidid', 'port_uniqueness'),
+    is_radio=False, is_enabled=True,
+    cls=PortUniqBtn,
+)
+bridge_midid_autostart = btns.add(
+    'main',
+    Label(
+        'On Start',
+        x=120, y=status_btn_y(10) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    size=20,
+    x=100, y=status_btn_y(10),
+    is_on=global_config.getboolean('a2jmidid', 'autostart'),
+    is_radio=False, is_enabled=True,
+)
+@bridge_midid_autostart.event
+def after_press(btn):
+    global_config.set('a2jmidid', 'autostart', 'true' if btn._pressed else 'false')
+    write_global_config()
+midid_started_btn = btns.add(
+    'main',
+    Label(
+        'Started',
+        x=250, y=status_btn_y(10) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    size=20,
+    x=230, y=status_btn_y(10),
+    is_on=a2jmidid.is_started(), is_radio=False, is_enabled=False,
+)
+midid_ehw_btn = btns.add(
+    'main',
+    Label(
+        'E.HW',
+        x=355, y=status_btn_y(10) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    size=15,
+    x=340, y=status_btn_y(10),
+    is_on=a2jmidid.get_hw_export(), is_radio=False, is_enabled=False,
+)
+midid_uniq_btn = btns.add(
+    'main',
+    Label(
+        'Uniq',
+        x=415, y=status_btn_y(10) - 15,
+        font_name='monospace',
+        batch=batch_status_btnl,
+    ),
+    size=15,
+    x=400, y=status_btn_y(10),
+    is_on=not a2jmidid.get_disable_port_uniqueness(),
+    is_radio=False, is_enabled=False,
+)
+
 def come_on_start():
     d_jack.StartServer()
     # TODO: manage a2j pulse2j etc
     #      modprobe snd-aloop
     #      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
     #      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
-    if global_config.getboolean('bridges', 'autostart'):
-        if global_config.get('bridges', 'tool') == 'jack_examples':
+    if global_config.getboolean('a2j_bridge', 'autostart'):
+        if global_config.get('a2j_bridge', 'tool') == 'jack_examples':
             if not aloop_started():
                 if check_kernel_SND_ALOOP():
                     start_aloop()
             connect_aloop()
+    if global_config.getboolean('a2jmidid', 'autostart'):
+        midid.start()
 
 def now_stop_them():
     aloop_stop()
+    midid.stop()
     d_jack.StopServer()
 
 def force_restart():
@@ -1456,7 +1627,19 @@ def update_driver_gui_state():
     except ValueError as exc:
         print(str(exc), file=stderr)
 
-def draw():
+def midid_update():
+    if midid.is_started:
+        midid_ehw_btn.toggle(a2jmidid.get_hw_export())
+        midid_uniq_btn.toggle(not a2jmidid.get_disable_port_uniqueness())
+        a2jmidid_export_hw_btn.is_enabled = False
+        a2jmidid_uniqueness_btn.is_enabled = False
+    else:
+        midid_ehw_btn.toggle(False)
+        midid_uniq_btn.toggle(False)
+        a2jmidid_export_hw_btn.is_enabled = True
+        a2jmidid_uniqueness_btn.is_enabled = True
+
+def draw_main():
     window.clear()
     welcome.draw()
     batch_status.draw()
@@ -1490,7 +1673,8 @@ def on_draw():
             get_info()
             aloop_started()
             aloop_connected()
-            draw()
+            midid_update()
+            draw_main()
         case 'engine':
             update_engine_gui_state()
             draw_configure()
