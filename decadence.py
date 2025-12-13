@@ -17,6 +17,7 @@ import re
 from glsl_button import SinScreens, SinButton
 
 import dbus  # dbus-python on PyPi
+from dbus.exceptions import DBusException
 from dbus.mainloop.glib import DBusGMainLoop
 # gdbus introspect -e -d org.jackaudio.service -o /org/jackaudio/Controller
 GDbus = None
@@ -66,7 +67,7 @@ class Graph:  # TODO: also map IDs and handle port renaming
         # one question... giving the last known means outputting the diff?
         # I don't think so...
         empty = [0, {}, {}]
-        if not self.server_started:
+        if not self.server_started or self._recursion_oops:
             return self._graph or empty
         try:
             graph = patchbay.GetGraph(self._version)
@@ -110,7 +111,11 @@ class Graph:  # TODO: also map IDs and handle port renaming
 
     def kill(self, client_id):
         if client_id:
-            pid = patchbay.GetClientPID(dbus.UInt64(client_id))
+            try:
+                pid = patchbay.GetClientPID(dbus.UInt64(client_id))
+            except DBusException as exc:
+                assert 'InvalidArgs' in str(exc)
+                return
             try:
                 kill(pid, SIGINT)
                 print(f'Killed {pid} with SIGINT')
@@ -218,8 +223,6 @@ window = pyglet.window.Window(caption='decadence', width=600, height=500)
 #window.push_handlers(wel)
 
 has_error = False
-from pyglet.text.document import UnformattedDocument
-from pyglet.text.layout import ScrollableTextLayout
 def error_dialog(msg, title='Error'):
     global has_error
     if has_error:
@@ -232,37 +235,25 @@ def error_dialog(msg, title='Error'):
         width=800,
         height=200,
     )
-    b = pyglet.graphics.Batch()
-    scroll = ScrollableTextLayout(
-        (doc := UnformattedDocument(msg)),
+    # error_batch = pyglet.graphics.Batch()
+    error_label = Label(
+        msg,
         x=0,
-        y=200,
-        width=800,
-        height=200,
+        y=w.height - 20,
+        width=w.width,
+        height=w.height,
+        font_name='monospace',
         multiline=True,
-        wrap_lines=True,
-        batch=b,
+        #batch=error_batch,
     )
-    doc.color = [0xff] * 4
-    doc.font_name = 'monospace'
+    # print(msg, file=stderr)
 
     @w.event
     def on_draw():
         w.clear()
-        '''
-        labels = []  # TODO: there's a pyglet text module that does this better
-        cxline = 80
-        for i in range(10):
-            labels.append(Label(
-                (line := msg[i * cxline : (i + 1) * cxline]),
-                y=w.height - 20 * (i+1),
-                font_name='monospace',
-                batch=b
-            ))
-            if len(line) < cxline:
-                break
-        '''
-        b.draw()
+        # error_batch.draw()  # batch has vertices but doesn't appear
+        # idk why...…                 ^ at least at the first on_draw…
+        error_label.draw()
 
     @w.event
     def on_close():
@@ -678,12 +669,18 @@ def check_kernel_SND_ALOOP():
         'mkdir -p /etc/modules-load.d && echo "snd-aloop" > /etc/modules-load.d/alsa.conf',
         title='SND_ALOOP',
     )
+    #      modprobe snd-aloop
+    #      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
+    #      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
     return False
 
 aloop_in = None
 aloop_out = None
 def start_aloop():
     global aloop_in, aloop_out
+    if aloop_in and aloop_in.is_alive() or aloop_out and aloop_out.is_alive():
+        print('theyre just starting, double press got u')
+        return
     SR = d_jack.GetSampleRate()
     PS = d_jack.GetBufferSize()
     CH = global_config.getint("a2j_bridge", "channels")
@@ -742,7 +739,7 @@ def connect_aloop():
         try:
             while not aloop_started():
                 pyglet.app.event_loop.sleep(0.05)
-        except dbus.exceptions.DBusException as exc:
+        except DBusException as exc:
             print('ERROR checking aloop_started', str(exc), file=stderr)
             if 'org.freedesktop.DBus.Error.NoReply' in str(exc):
                 dbus_reconnect()
@@ -887,7 +884,7 @@ p2j_autostart_btn = btns.add(
     ),
     size=20,
     x=125, y=status_btn_y(11),
-    is_on=False, is_radio=False, is_enabled=False,
+    is_on=True, is_radio=False, is_enabled=False,
 )
 @p2j_autostart_btn.event
 def after_press(btn):
@@ -903,15 +900,11 @@ p2j_started_btn = btns.add(
     ),
     size=20,
     x=230, y=status_btn_y(11),
-    is_on=False, is_radio=False, is_enabled=False,
+    is_on=True, is_radio=False, is_enabled=False,
 )
 
 def come_on_start():
     d_jack.StartServer()
-    # TODO: manage a2j pulse2j etc
-    #      modprobe snd-aloop
-    #      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
-    #      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
     if global_config.getboolean('a2j_bridge', 'autostart'):
         if global_config.get('a2j_bridge', 'tool') == 'jack_examples':
             if not aloop_started():
@@ -933,7 +926,7 @@ def force_restart():
         print('killing jack: ', d_jack.Exit())
         for _ in range(20):
             pyglet.app.event_loop.sleep(0.05)
-    except dbus.exceptions.DBusException as exc:
+    except DBusException as exc:
         print('caught', exc)
         ...  # tells didn't answer
         ...  # doesn't tell it anymore...
@@ -957,7 +950,7 @@ def get_info():  # through dbus
     try:
         msg = None
         dsp_status_val.text = f'{d_jack.GetLoad():.2f}%'
-    except dbus.exceptions.DBusException as exc:
+    except DBusException as exc:
         msg = str(exc)
     if msg is None:
         try:
@@ -967,7 +960,7 @@ def get_info():  # through dbus
             rt_status_val.text = 'Yes' if d_jack.IsRealtime() else 'No'
             sr_status_val.text = f'{d_jack.GetSampleRate()} Hz'
             bl_status_val.text = f'{d_jack.GetLatency():.2f} ms'
-        except dbus.exceptions.DBusException as exc:
+        except DBusException as exc:
             msg = str(exc)
     if msg is not None:
         dsp_status_val.text = msg
@@ -1441,7 +1434,7 @@ class SaveBtn(SinButton):
                 )
                 clk_btn.mark_group_as_not_modified()
                 print(f'set engine.clock-source: {clk_btn.value}')
-            except dbus.exceptions.DBusException as exc:
+            except DBusException as exc:
                 msg = f'Error setting up engine parameter "clock-source"\n{exc}'
                 on_error(msg)
         if scm_btn.modified:
@@ -1815,7 +1808,7 @@ while once:
         pyglet.app.run(.05)  # why should you redraw this thing @60Hz?
         # a redraw each 100ms (10Hz) seems even too fast to me
         # actually changed to 5 times per second.
-    except dbus.exceptions.DBusException as exc:
+    except DBusException as exc:
         print(str(exc), file=stderr)
         error_dialog(str(exc), title='Unexpected Error')
         server_status_val.text = 'DEAD'

@@ -5,6 +5,35 @@ Dbus Explained (to) Castix About Decentralized Efforts aNd Community Exchange
 
 This ended up to be just a jackdbus frontend gui
 
+
+User Guide
+----------
+
+When to kill? When as a developer you modified jack, stop/start won't reload your changes
+
+When to Switch Master? I don't know…
+
+When to Reset Xruns? when you want to, helps keeping an eye on your load and latency
+
+Cadence now shows clock sources disabled… That's expected and fine (if that somehow broke something for you, reset from cadence). Cadence clock selection is for jack2<1.9.10 (~2014)
+
+Where is alsa_in / alsa_out ? (Bridging ALSA 2 JACK)
+ - install media-sound/jack-example-tools with alsa USE flag
+   REPO: https://github.com/jackaudio/jack-example-tools
+
+I'm new user, doesn't start... Press "config" go to "ALSA Driver" play with "Duplex" clickin your soundcard everywhere
+  # TODO: eww, let different soundcards have different configs? is this related?
+
+Do you really need to manage my asoundrc?
+  Unfortunately yes... (tried not to: aplay looks at conf file but doesn't list the pcm)
+    (maybe if we split that into many files...)
+    (so pcm definitions and usage need to be in the same asoundrc atm)
+  I have no idea how, but bridge started to work after writing this comment...
+  Pulseaudio is also kinda working: halts ~a second when you start/stop jack
+  I have no idea how, but pulseaudio is now working after writing this comment...
+  Pulseaudio is  now       working: starts and stops together with jack
+                                    (I mean, not the transport, but the server)
+
 History
 -------
 
@@ -44,18 +73,3 @@ There's one mention about CV through metadata
 I'm not sure if helvum or some other pipewire-specific supports it
 I guess the way to go is carla even on pipewire.
 (I need to package carla for gentoo then)
-
-User Guide
-----------
-
-When to kill? When as a developer you modified jack, stop/start won't reload your changes
-
-When to Switch Master? I don't know…
-
-When to Reset Xruns? when you want to, helps keeping an eye on your load and latency
-
-Cadence now shows clock sources disabled… That's expected and fine (if that somehow broke something for you, reset from cadence). Cadence clock selection is for jack2<1.9.10 (~2014)
-
-Where is alsa_in / alsa_out ? (Bridging ALSA 2 JACK)
- - install media-sound/jack-example-tools with alsa USE flag
-   REPO: https://github.com/jackaudio/jack-example-tools
