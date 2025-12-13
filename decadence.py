@@ -218,7 +218,8 @@ window = pyglet.window.Window(caption='decadence', width=600, height=500)
 #window.push_handlers(wel)
 
 has_error = False
-
+from pyglet.text.document import UnformattedDocument
+from pyglet.text.layout import ScrollableTextLayout
 def error_dialog(msg, title='Error'):
     global has_error
     if has_error:
@@ -232,10 +233,23 @@ def error_dialog(msg, title='Error'):
         height=200,
     )
     b = pyglet.graphics.Batch()
+    scroll = ScrollableTextLayout(
+        (doc := UnformattedDocument(msg)),
+        x=0,
+        y=200,
+        width=800,
+        height=200,
+        multiline=True,
+        wrap_lines=True,
+        batch=b,
+    )
+    doc.color = [0xff] * 4
+    doc.font_name = 'monospace'
 
     @w.event
     def on_draw():
         w.clear()
+        '''
         labels = []  # TODO: there's a pyglet text module that does this better
         cxline = 80
         for i in range(10):
@@ -247,10 +261,12 @@ def error_dialog(msg, title='Error'):
             ))
             if len(line) < cxline:
                 break
+        '''
         b.draw()
 
     @w.event
     def on_close():
+        global has_error
         has_error = False
 
 btn_w, btn_h = 60, 20
@@ -650,11 +666,17 @@ aloop_connected_btn = btns.add(
 )
 
 def check_kernel_SND_ALOOP():
-    if check_output(['grep', '-l', '-e', "snd_aloop", '/proc/kallsyms']):
-        return True # module loaded
-    error_dialog('SND_ALOOP',
+    try:
+        if check_output(['grep', '-l', '-e', "snd_aloop", '/proc/kallsyms']):
+            return True # module loaded
+    except CalledProcessError:
+        ...
+    error_dialog(
         'You need to check SND_ALOOP kernel config.\n'
-        "Try `modprobe snd_aloop` if that's a module"
+        "Try `modprobe snd_aloop` if that's a module\n"
+        "https://wiki.gentoo.org/wiki/JACK#ALSA explains\n\n"
+        'mkdir -p /etc/modules-load.d && echo "snd-aloop" > /etc/modules-load.d/alsa.conf',
+        title='SND_ALOOP',
     )
     return False
 
