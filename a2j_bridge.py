@@ -1,119 +1,150 @@
-import dbus
-import dbus.service
-from dbus.mainloop.glib import DBusGMainLoop
-from gi.repository import GLib
-from multiprocessing import Process
-from subprocess import check_output
+# no lockfile is held. expecting only one instance of this is running
+from dbus_next.aio import MessageBus
+from dbus_next.service import (ServiceInterface,
+                               method, dbus_property, signal)
+import asyncio
 
 
-class Bridge(dbus.service.Object):
-    def __init__(self, bus, object_path='/'):
-        print(path)
-        dbus.service.Object.__init__(self, bus, '/')
+# For some reason, methods are global coroutines
+async def check_in(self):
+    assert self.configured and self.cloop
+    checking = 'fast'  # faster crash report, then check slowly
+    while checking:
+        try:
+            await asyncio.wait_for(self.cloop.wait(), timeout=0.02 if checking == 'fast' else 2)
+        except TimeoutError:
+            print('In Alive')
+        checking = True
+        if self.cloop.returncode is not None:
+            print('InDied')
+            self.InDied()
+            checking = False
+
+async def check_out(self):
+    assert self.configured and self.ploop
+    checking = 'fast'  # faster crash report, then check slowly
+    while checking:
+        try:
+            await asyncio.wait_for(self.ploop.wait(), timeout=0.02 if checking == 'fast' else 2)
+        except TimeoutError:
+            print('Out Alive')
+        checking = True
+        if self.ploop.returncode is not None:
+            print('OutDied')
+            self.OutDied()
+            checking = False
+
+async def stop_them(self, capture, playback):
+    print('stopping', capture, playback, self.cloop, self.ploop)
+    if capture and self.cloop:
+        self.cloop.kill()
+        await self.cloop.wait()
+        # assert self.cloop.errorcode is not None
+        # well actually the signal puts None, can't assert
+    if playback and self.ploop:
+        self.ploop.kill()
+        await self.ploop.wait()
+
+
+class Bridge(ServiceInterface):
+    def __init__(self):
+        super().__init__('just.bridging.Bridge')
         self.cloop = None
         self.ploop = None
+        self.configured = False
+        self.watchers = [None, None]
 
-    @dbus.service.method(dbus_interface='just.bridging.Bridge',
-                         in_signature='uuu', out_signature='b')
-    def configure(self, samplerate, buffer_size, nchans):
-        if self.initialized:
+    @method()
+    def Configure(self, samplerate: 'u', buffer_size: 'u', nchans: 'u') -> 'b':
+        if self.configured:
             return False
         if self.cloop or self.ploop:
             return False
-        self.initialized = True
         self.SR = samplerate
         self.PS = buffer_size
         self.CH = nchans
-        self.cloop = Process(target=self.target_in)
-        self.ploop = Process(target=self.target_out)
+        self.configured = True
         return True
 
-    @dbus.service.method(dbus_interface='just.bridging.Bridge',
-                         in_signature='', out_signature='b')
-    def start_in(self):
-        if not self.initialized:
+    @method()
+    async def StartIn(self) -> 'b':
+        if not self.configured:
             return False
-        if self.cloop and self.cloop.is_alive():
+        if self.cloop:
             return False
-        cloop.start()
-        return True
-
-    @dbus.service.method(dbus_interface='just.bridging.Bridge',
-                         in_signature='', out_signature='b')
-    def start_out(self):
-        if not self.initialized:
-            return False
-        if self.ploop and self.ploop.is_alive():
-            return False
-        ploop.start()
-        return True
-    @dbus.service.method(dbus_interface='just.bridging.Bridge',
-                         in_signature='', out_signature='b')
-    def start_both(self):
-        return self.start_in() and self.start_out()
-
-    @dbus.service.method(dbus_interface='just.bridging.Bridge',
-                         in_signature='bb', out_signature='')
-    def stop(self, capture, playback):
-        if capture and self.cloop:
-            self.cloop.terminate()
-        if playback and self.ploop:
-            self.ploop.terminate()
-
-    @dbus.service.method(dbus_interface='just.bridging.Bridge',
-                         in_signature='bb', out_signature='')
-    def kill(self, capture, playback):
-        global loop
-        self.stop()
-        loop.quit()
-        exit(0)
-
-    @dbus.service.signal(dbus_interface='just.bridging.Bridge',
-                         signature='')
-    def in_died(self):
-        return
-
-    @dbus.service.signal(dbus_interface='just.bridging.Bridge',
-                         signature='')
-    def out_died(self):
-        return
-
-    def target_in(self):
-        env = {
-            'JACK_SAMPLE_RATE': f'{self.SR:d}',
-            'JACK_PERIOD_SIZE': f'{self.PS:d}',
-        }
-        try:
-            check_output([
-                '/usr/bin/alsa_in',
+        self.cloop = await asyncio.create_subprocess_exec(' '.join([
                 '-d', 'cloop',  # capture loop
                 f'{self.SR:d}',
                 '-p',
                 f'{self.PS:d}',
                 "-j", "alsa2jack",
                 "-c", f'{self.CH:d}',
-            ], env=env)
-        except CalledProcessError as exc:
-            self.in_died()
+            ]),
+            executable='/usr/bin/alsa_in',
+            env={
+                'JACK_SAMPLE_RATE': f'{self.SR:d}',
+                'JACK_PERIOD_SIZE': f'{self.PS:d}',
+            },
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self.watchers[0] = asyncio.create_task(check_in(self))  # like call_soon
+        # we keep a ref to tasks to ensure GC keeps them
+        return True
 
-    def target_out(SR, PS, CH):
-        try:
-            check_output([
-                '/usr/bin/alsa_out',
+    @method()
+    async def StartOut(self) -> 'b':
+        if not self.configured:
+            return False
+        if self.ploop:
+            return False
+        self.ploop = await asyncio.create_subprocess_exec(' '.join([
                 '-d', 'ploop',  # playback loop
-                f'{SR:d}',
+                f'{self.SR:d}',
                 '-p',
-                f'{PS:d}',
+                f'{self.PS:d}',
                 "-j", "jack2alsa",
-                "-c", f'{CH:d}',
-            ])
-        except CalledProcessError as exc:
-            self.out_died()
+                "-c", f'{self.CH:d}',
+            ]),
+            executable='/usr/bin/alsa_out',
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self.watchers[1] = asyncio.create_task(check_out(self))  # like call_soon
+        # we keep a ref to tasks to ensure GC keeps them
+        return True
+
+    @method()
+    async def Stop(self, capture: 'b', playback: 'b'):
+        await asyncio.create_task(stop_them(self, capture, playback))
+
+    @method()
+    async def kill(self):
+        await asyncio.create_task(stop_them(self, True, True))
+        for watcher in self.watchers:
+            if watcher:
+                watcher.cancel()
+        loop.stop()
+
+    @signal()
+    def InDied(self):
+        self.cloop = None
+
+    @signal()
+    def OutDied(self):
+        self.ploop = None
+
+
+async def main():
+    bus = await MessageBus().connect()
+    bridge = Bridge()
+    bus.export('/', bridge)
+    await bus.request_name('just.bridging.Bridge')
+    await bus.wait_for_disconnect()
 
 if __name__ == '__main__':
-    DBusGMainLoop(set_as_default=True)
-    bus = dbus.SessionBus()
-    name = dbus.service.BusName('just.bridging.Bridge', bus)
-    bridge = Bridge(bus)
-    loop = GLib.MainLoop()
-    loop.run()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    asyncio.get_event_loop().run_until_complete(main())
