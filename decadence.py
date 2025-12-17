@@ -24,10 +24,11 @@ GDbus = None
 d_jack = None
 patchbay = None
 jackcfg = None
+a2j_bridge = None
 a2jmidid = None
 DBusGMainLoop(set_as_default=True)
 def dbus_reconnect():
-    global GDbus, d_jack, patchbay, jackcfg, jack_control, a2jmidid
+    global GDbus, d_jack, patchbay, jackcfg, jack_control, a2j_bridge, a2jmidid
     GDbus = dbus.bus.BusConnection()
     d_jack = GDbus.get_object(
         "org.jackaudio.service",
@@ -36,6 +37,10 @@ def dbus_reconnect():
     patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
     jackcfg = dbus.Interface(d_jack, "org.jackaudio.Configure")
     # yea, all of them
+    a2j_bridge = dbus.Interface(
+        GDbus.get_object("just.bridging.Bridge", "/"),
+        "just.bridging.Bridge"
+    )
     a2jmidid = dbus.Interface(
         GDbus.get_object("org.gna.home.a2jmidid", "/"),
         "org.gna.home.a2jmidid.control"
@@ -133,6 +138,20 @@ patchbay.connect_to_signal(
     'ServerStopped',
     graph.ds_server_stopped,
     "org.jackaudio.JackControl"
+)
+
+def a2j_bridge_stopped():
+    global aloop_started_btn
+    aloop_started_btn.toggle(False)
+a2j_bridge.connect_to_signal(
+    'InDied',
+    a2j_bridge_stopped,
+    "just.bridging.Bridge"
+)
+a2j_bridge.connect_to_signal(
+    'OutDied',
+    a2j_bridge_stopped,
+    "just.bridging.Bridge"
 )
 
 class MIDId:
@@ -617,15 +636,15 @@ def aloop_started(has_btn=True):
         if 'org.jackaudio.Error.ServerNotRunning' in str(exc):
             return _toggle(False)
         raise
-    in_started = [str(x) for x in all_ports if 'alsa2jack' in x]
-    out_started = [str(x) for x in all_ports if 'jack2alsa' in x]
+    in_started = [str(x) for x in all_ports if 'alsa_in' in x]
+    out_started = [str(x) for x in all_ports if 'alsa_out' in x]
     return _toggle(in_started and out_started)
 
 def aloop_connected(has_btn=True):
     connections = graph.get_connections()
     connected = (
-        'alsa2jack:capture_1' in connections
-        and 'jack2alsa:playback_1' in connections.get('system:capture_1', [])
+        'alsa_in:capture_1' in connections
+        and 'alsa_out:playback_1' in connections.get('system:capture_1', [])
     )
     if has_btn:
         aloop_connected_btn.toggle(connected)
@@ -674,58 +693,21 @@ def check_kernel_SND_ALOOP():
     #      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
     return False
 
-aloop_in = None
-aloop_out = None
 def start_aloop():
-    global aloop_in, aloop_out
-    if aloop_in and aloop_in.is_alive() or aloop_out and aloop_out.is_alive():
-        print('theyre just starting, double press got u')
-        return
     SR = d_jack.GetSampleRate()
     PS = d_jack.GetBufferSize()
     CH = global_config.getint("a2j_bridge", "channels")
-    env = {
-        'JACK_SAMPLE_RATE': f'{SR:d}',
-        'JACK_PERIOD_SIZE': f'{PS:d}',
-    }
-    def target_in():
-        try:
-            check_output([
-                '/usr/bin/alsa_in',
-                '-d', 'cloop',  # capture loop
-                f'{SR:d}',
-                '-p',
-                f'{PS:d}',
-                "-j", "alsa2jack",
-                "-c", f'{CH:d}',
-            ], env=env)
-        except CalledProcessError as exc:
-            print('alsa_in died')
-    (aloop_in := Process(target=target_in)).start()
-    def target_out():
-        try:
-            check_output([
-                '/usr/bin/alsa_out',
-                '-d', 'ploop',  # playback loop
-                f'{SR:d}',
-                '-p',
-                f'{PS:d}',
-                "-j", "jack2alsa",
-                "-c", f'{CH:d}',
-            ], env=env)
-        except CalledProcessError as exc:
-            print('alsa_out died')
-    (aloop_out := Process(target=target_out)).start()
+    a2j_bridge.Configure(SR, PS, CH)
+    a2j_bridge.StartIn()
+    a2j_bridge.StartOut()
+    aloop_started_btn.toggle(True)
 
 def aloop_stop():
-    global aloop_in, aloop_out
-    if aloop_in:
-        aloop_in.terminate()
-    if aloop_out:
-        aloop_out.terminate()
+    a2j_bridge.Stop(True, True)
     # but that's not enough ofc
-    graph.kill(graph.get_client_id('alsa2jack'))
-    graph.kill(graph.get_client_id('jack2alsa'))
+    # well now it is, but doing so anyway
+    graph.kill(graph.get_client_id('alsa_in'))
+    graph.kill(graph.get_client_id('alsa_out'))
 
 def connect_aloop():
     def _on_error(exc):  # async
@@ -746,14 +728,14 @@ def connect_aloop():
                 return
         for chan in range(1, global_config.getint('a2j_bridge', 'channels') + 1):
             patchbay.ConnectPortsByName(
-                'alsa2jack', f'capture_{chan}',
+                'alsa_in', f'capture_{chan}',
                 'system', f'playback_{chan}',
                 reply_handler=lambda: ...,
                 error_handler=_on_error,
             )
             patchbay.ConnectPortsByName(
                 'system', f'capture_{chan}',
-                'jack2alsa', f'playback_{chan}',
+                'alsa_out', f'playback_{chan}',
                 reply_handler=lambda: ...,
                 error_handler=_on_error,
             )
@@ -916,12 +898,13 @@ def come_on_start():
 
 def now_stop_them():
     print('stopping a2j, a2jmidid, jack')
-    aloop_stop()
+    a2j_bridge.Stop(True, True)
     midid.stop()
     d_jack.StopServer()
 
 def force_restart():
     now_stop_them()
+    a2j_bridge.Kill()
     try:
         print('killing jack: ', d_jack.Exit())
         for _ in range(20):

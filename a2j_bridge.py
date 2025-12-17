@@ -72,14 +72,13 @@ class Bridge(ServiceInterface):
             return False
         if self.cloop:
             return False
-        self.cloop = await asyncio.create_subprocess_exec(' '.join([
-                '-d', 'cloop',  # capture loop
-                f'{self.SR:d}',
-                '-p',
-                f'{self.PS:d}',
-                "-j", "alsa2jack",
-                "-c", f'{self.CH:d}',
-            ]),
+        self.cloop = await asyncio.create_subprocess_exec(
+            '/usr/bin/alsa_in',
+            '-d', 'cloop',  # capture loop
+            '-r', f'{self.SR:d}',
+            '-p', f'{self.PS:d}',
+            "-c", f'{self.CH:d}',
+            #"-j", "alsa2jack",
             executable='/usr/bin/alsa_in',
             env={
                 'JACK_SAMPLE_RATE': f'{self.SR:d}',
@@ -99,14 +98,13 @@ class Bridge(ServiceInterface):
             return False
         if self.ploop:
             return False
-        self.ploop = await asyncio.create_subprocess_exec(' '.join([
-                '-d', 'ploop',  # playback loop
-                f'{self.SR:d}',
-                '-p',
-                f'{self.PS:d}',
-                "-j", "jack2alsa",
-                "-c", f'{self.CH:d}',
-            ]),
+        self.ploop = await asyncio.create_subprocess_exec(
+            '/usr/bin/alsa_out',
+            '-d', 'ploop',  # playback loop
+            '-r', f'{self.SR:d}',
+            '-p', f'{self.PS:d}',
+            "-c", f'{self.CH:d}',
+            #"-j", "jack2alsa",
             executable='/usr/bin/alsa_out',
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
@@ -121,7 +119,7 @@ class Bridge(ServiceInterface):
         await asyncio.create_task(stop_them(self, capture, playback))
 
     @method()
-    async def kill(self):
+    async def Kill(self):
         await asyncio.create_task(stop_them(self, True, True))
         for watcher in self.watchers:
             if watcher:
