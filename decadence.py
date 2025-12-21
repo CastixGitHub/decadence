@@ -1406,5 +1406,6 @@ def update_loop(dt):
     asyncio.get_event_loop().run_until_complete(update_main())
 
 navigation.to_main()
+update_loop(0)
 pyglet.clock.schedule_interval(update_loop, 1)
 pyglet.app.run(.05)  # why should you redraw this thing @60Hz?
