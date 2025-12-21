@@ -2,237 +2,30 @@ import pyglet
 from pyglet.window import Window
 from pyglet.text import Label
 from pyglet.gui import TextEntry
-from configparser import ConfigParser
+from dbus_next import DBusError, Variant
 from functools import partial
 from subprocess import check_output, CalledProcessError
-from multiprocessing import Process
-from threading import Thread
-from pathlib import Path
-from os import access, F_OK, kill
-from signal import SIGINT
 from sys import stderr
+import asyncio
 import re
-
 
 from glsl_button import SinScreens, SinButton
 
-import dbus  # dbus-python on PyPi
-from dbus.exceptions import DBusException
-from dbus.mainloop.glib import DBusGMainLoop
-# gdbus introspect -e -d org.jackaudio.service -o /org/jackaudio/Controller
-GDbus = None
-d_jack = None
-patchbay = None
-jackcfg = None
-a2j_bridge = None
-a2jmidid = None
-DBusGMainLoop(set_as_default=True)
-def dbus_reconnect():
-    global GDbus, d_jack, patchbay, jackcfg, jack_control, a2j_bridge, a2jmidid
-    GDbus = dbus.bus.BusConnection()
-    d_jack = GDbus.get_object(
-        "org.jackaudio.service",
-        "/org/jackaudio/Controller"
-    )
-    patchbay = dbus.Interface(d_jack, "org.jackaudio.JackPatchbay")
-    jackcfg = dbus.Interface(d_jack, "org.jackaudio.Configure")
-    # yea, all of them
-    a2j_bridge = dbus.Interface(
-        GDbus.get_object("just.bridging.Bridge", "/"),
-        "just.bridging.Bridge"
-    )
-    a2jmidid = dbus.Interface(
-        GDbus.get_object("org.gna.home.a2jmidid", "/"),
-        "org.gna.home.a2jmidid.control"
-    )
-dbus_reconnect()
-
-class Graph:  # TODO: also map IDs and handle port renaming
-    #                 but we don't need that, so...
-    def __init__(self):
-        self._version = 0
-        self._recursion_oops = 0
-        self._graph = None
-        self._server_started = False
-
-    def ds_server_started(self,):
-        self._server_started = True
-
-    def ds_server_stopped(self):
-        self._server_started = False
-
-    @property
-    def server_started(self):
-        if not self._server_started:
-            self._server_started = bool(d_jack.IsStarted())
-        return self._server_started
-
-    @property
-    def graph(self):
-        # one question... giving the last known means outputting the diff?
-        # I don't think so...
-        empty = [0, {}, {}]
-        if not self.server_started or self._recursion_oops:
-            return self._graph or empty
-        try:
-            graph = patchbay.GetGraph(self._version)
-        except dbus.exceptions.DBusException as exc:
-            if 'org.jackaudio.Error.ServerNotRunning' in str(exc):
-                return self._graph or empty
-            elif 'org.jackaudio.Error.InvalidArgs' in str(exc):
-                self._version = 0
-                self._recursion_oops += 1
-                if self._recursion_oops >= 2:
-                    raise
-                g = self.graph
-                self_recursion_oops = 0
-                return g
-            raise
-        if int(graph[0]) != self._version:
-            self._version = int(graph[0])
-            self._graph = graph
-        return self._graph
-
-    def get_connections(self):
-        _connections = set()
-        for connections_a in self.graph[2]:
-            connections = connections_a[1::2]
-            connections = [
-                f'{client}:{port}'
-                for client, port in zip(connections[::2], connections[1::2])
-            ]
-            _connections |= set(zip(connections[::2], connections[1::2]))
-        connections = {}
-        for conn in _connections:
-            connections.setdefault(conn[0], []).append(conn[1])
-        return connections
-
-    def get_clients(self):
-        return {
-            str(client[1]): int(client[0])
-            for client in self.graph[1]
-        }
-
-
-    def kill(self, client_id):
-        if client_id:
-            try:
-                pid = patchbay.GetClientPID(dbus.UInt64(client_id))
-            except DBusException as exc:
-                assert 'InvalidArgs' in str(exc)
-                return
-            try:
-                kill(pid, SIGINT)
-                print(f'Killed {pid} with SIGINT')
-            except ProcessLookupError: ...
-
-    def get_client_id(self, client_name):
-        return self.get_clients().get(client_name)
-graph = Graph()
-patchbay.connect_to_signal(
-    'ServerStarted',
-    graph.ds_server_started,
-    "org.jackaudio.JackControl"
-)
-patchbay.connect_to_signal(
-    'ServerStopped',
-    graph.ds_server_stopped,
-    "org.jackaudio.JackControl"
+import dclients
+from dclients import (
+    main_dbus, features, get_info,
+    global_config, write_global_config,
+    diw, graph, midid,
+    aloop_started, aloop_connected, start_aloop,
+    midid_update,
+    come_on_start, now_stop_them, force_restart, reset_xruns, switch_mast,
 )
 
-def a2j_bridge_stopped():
-    global aloop_started_btn
-    aloop_started_btn.toggle(False)
-a2j_bridge.connect_to_signal(
-    'InDied',
-    a2j_bridge_stopped,
-    "just.bridging.Bridge"
-)
-a2j_bridge.connect_to_signal(
-    'OutDied',
-    a2j_bridge_stopped,
-    "just.bridging.Bridge"
+asyncio.run_coroutine_threadsafe(
+    main_dbus(),
+    asyncio.get_event_loop()
 )
 
-class MIDId:
-    def start(self):
-        if not a2jmidid.is_started():
-            self.enforce_config()
-            a2jmidid.start()
-        return self.is_started
-
-    def stop(self):
-        if a2jmidid.is_started():
-            a2jmidid.stop()
-        return not self.is_started
-
-    @property
-    def is_started(self):
-        res = a2jmidid.is_started()
-        self.set_started_gui(res)
-        return res
-
-    def set_started_gui(self, val):
-        global midid_started_btn
-        midid_started_btn.toggle(val)
-
-    def enforce_config(self):
-        a2jmidid.set_disable_port_uniqueness(
-            not global_config.getboolean('a2jmidid', 'port_uniqueness')
-        )
-        a2jmidid.set_hw_export(
-            global_config.getboolean('a2jmidid', 'export_hw')
-        )
-
-    def ds_bridge_started(self):
-        self.set_started_gui(True)
-
-    def ds_bridge_stopped(self):
-        self.set_started_gui(False)
-midid = MIDId()
-a2jmidid.connect_to_signal(
-    'bridge_started',
-    midid.ds_bridge_started,
-    "org.gna.home.a2jmidid.control"
-)
-a2jmidid.connect_to_signal(
-    'bridge_stopped',
-    midid.ds_bridge_stopped,
-    "org.gna.home.a2jmidid.control"
-)
-
-def dbus_gi_loop():
-    from gi.repository import GLib  # pip install pygobject
-    # ewww, must use gi? we got gtk bindings then...
-    # maybe let's help dbus-python supporting more event loops
-    loop = GLib.MainLoop()
-    loop.run()
-Thread(name='dbusloop', target=dbus_gi_loop).start()
-# TODO: later make this a daemon?
-
-global_config = ConfigParser()
-config_path = Path('~/.config/decadence.ini').expanduser()
-if access(config_path, F_OK):
-    global_config.read(config_path)
-else:
-    global_config.read_dict({
-        'a2j_bridge': {
-            'autostart': False,
-            'channels': 2,
-            'tool': 'jack_examples',
-        },
-        'a2jmidid': {
-            'autostart': False,
-            'export_hw': False,
-            'port_uniqueness': False,
-            # 'note_filtering': ... # -n     do not filter note on
-            # whut? not exposed through dbus anyway...
-            # actually do we need to store them?
-        }
-    })
-def write_global_config():
-    with open(config_path.expanduser(), 'w') as config_file:
-        global_config.write(config_file)
 
 window = pyglet.window.Window(caption='decadence', width=600, height=500)
 # i3wm users: $mod+Shift+space to toggle floating to tiling
@@ -265,7 +58,7 @@ def error_dialog(msg, title='Error'):
         multiline=True,
         #batch=error_batch,
     )
-    # print(msg, file=stderr)
+    print(msg, file=stderr)
 
     @w.event
     def on_draw():
@@ -469,18 +262,17 @@ bl_status_val = Label(
 
 class MainButton(SinButton):
     def on_press(widget):
-        print('on_press', widget)
         if configure_status_btn is widget:
             navigation.to_engine()
             return
-        if action := dbus_buttons.get(widget):
-            try:
-                action()
-            except BaseException as exc:
-                error_dialog(str(exc))
-        else:
-            print(msg := 'UNKNOWN button pressed')
-            error_dialog(msg)
+        try:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(widget.action())
+        except DBusError as exc:
+            #assert False, 'DEBUG: catch this one locally'
+            breakpoint()
+        except BaseException as exc:
+            error_dialog(str(exc))
 
 start_status_btn = btns.add(
     'main',
@@ -561,6 +353,14 @@ configure_status_btn = btns.add(
     cls=MainButton,
 )
 
+start_status_btn.action         = come_on_start
+stop_status_btn.action          = now_stop_them
+force_restart_status_btn.action = force_restart
+reset_xruns_status_btn.action   = reset_xruns
+switch_master_status_btn.action = switch_mast
+
+# Bridges
+
 cfg_status_bridge_label = Label(
     'ALSA2JACK:',
     x=15, y=status_btn_y(7) - 15,
@@ -623,32 +423,6 @@ def after_press(btn):
     global_config.set('a2j_bridge', 'autostart', 'true' if btn._pressed else 'false')
     write_global_config()
 
-def aloop_started(has_btn=True):
-    def _toggle(val: bool):
-        if has_btn:
-            aloop_started_btn.toggle(val)
-        return val
-    if not graph.server_started:
-        return _toggle(False)
-    try:
-        all_ports = patchbay.GetAllPorts()
-    except Exception as exc:
-        if 'org.jackaudio.Error.ServerNotRunning' in str(exc):
-            return _toggle(False)
-        raise
-    in_started = [str(x) for x in all_ports if 'alsa_in' in x]
-    out_started = [str(x) for x in all_ports if 'alsa_out' in x]
-    return _toggle(in_started and out_started)
-
-def aloop_connected(has_btn=True):
-    connections = graph.get_connections()
-    connected = (
-        'alsa_in:capture_1' in connections
-        and 'alsa_out:playback_1' in connections.get('system:capture_1', [])
-    )
-    if has_btn:
-        aloop_connected_btn.toggle(connected)
-    return connected
 
 aloop_started_btn = btns.add(
     'main',
@@ -660,7 +434,9 @@ aloop_started_btn = btns.add(
     )),
     size=20,
     x=230, y=status_btn_y(8),
-    is_on=aloop_started(False), is_radio=False, is_enabled=False,
+    #is_on=aloop_started(False),
+    is_on=False,
+    is_radio=False, is_enabled=False,
 )
 aloop_connected_btn = btns.add(
     'main',
@@ -672,75 +448,8 @@ aloop_connected_btn = btns.add(
     )),
     size=20,
     x=330, y=status_btn_y(8),
-    is_on=aloop_connected(False), is_radio=False, is_enabled=False,
+    is_on=False, is_radio=False, is_enabled=False,
 )
-
-def check_kernel_SND_ALOOP():
-    try:
-        if check_output(['grep', '-l', '-e', "snd_aloop", '/proc/kallsyms']):
-            return True # module loaded
-    except CalledProcessError:
-        ...
-    error_dialog(
-        'You need to check SND_ALOOP kernel config.\n'
-        "Try `modprobe snd_aloop` if that's a module\n"
-        "https://wiki.gentoo.org/wiki/JACK#ALSA explains\n\n"
-        'mkdir -p /etc/modules-load.d && echo "snd-aloop" > /etc/modules-load.d/alsa.conf',
-        title='SND_ALOOP',
-    )
-    #      modprobe snd-aloop
-    #      alsa_in -d cloop 44100 -p 1024 -j alsa2jack -q 1 -c 2
-    #      alsa_out -d ploop 44100 -p 1024 -j jack2alsa -q 1 -c 2
-    return False
-
-def start_aloop():
-    SR = d_jack.GetSampleRate()
-    PS = d_jack.GetBufferSize()
-    CH = global_config.getint("a2j_bridge", "channels")
-    a2j_bridge.Configure(SR, PS, CH)
-    a2j_bridge.StartIn()
-    a2j_bridge.StartOut()
-    aloop_started_btn.toggle(True)
-
-def aloop_stop():
-    a2j_bridge.Stop(True, True)
-    # but that's not enough ofc
-    # well now it is, but doing so anyway
-    graph.kill(graph.get_client_id('alsa_in'))
-    graph.kill(graph.get_client_id('alsa_out'))
-
-def connect_aloop():
-    def _on_error(exc):  # async
-        if 'org.freedesktop.DBus.Error.NoReply' in str(exc):
-            dbus_reconnect()
-        elif 'failed with 17' in str(exc):
-            ... # 17 already connected
-        else:
-            raise
-    def _connect_aloop():
-        try:
-            while not aloop_started():
-                pyglet.app.event_loop.sleep(0.05)
-        except DBusException as exc:
-            print('ERROR checking aloop_started', str(exc), file=stderr)
-            if 'org.freedesktop.DBus.Error.NoReply' in str(exc):
-                dbus_reconnect()
-                return
-        for chan in range(1, global_config.getint('a2j_bridge', 'channels') + 1):
-            patchbay.ConnectPortsByName(
-                'alsa_in', f'capture_{chan}',
-                'system', f'playback_{chan}',
-                reply_handler=lambda: ...,
-                error_handler=_on_error,
-            )
-            patchbay.ConnectPortsByName(
-                'system', f'capture_{chan}',
-                'alsa_out', f'playback_{chan}',
-                reply_handler=lambda: ...,
-                error_handler=_on_error,
-            )
-        aloop_connected_btn.toggle(True)
-    Thread(target=_connect_aloop).start()
 
 # next a2jmidid
 
@@ -754,8 +463,11 @@ class EHWBtn(SinButton):
     def on_press(btn):
         global_config.set('a2jmidid', 'export_hw', 'true' if not btn._pressed else 'false'),
         write_global_config()
-        if not midid.is_started:
-            a2jmidid.set_hw_export(not btn._pressed)
+        if not midid.started:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(
+                diw.a2j_midid.call_set_hw_export(not btn._pressed)
+            )
             super().on_press() # then the toggle ofc (hence not)
 a2jmidid_export_hw_btn = btns.add(
     'main',
@@ -777,8 +489,11 @@ class PortUniqBtn(SinButton):
         global_config.set('a2jmidid', 'port_uniqueness', 'true' if not btn._pressed else 'false'),
         # not ofc
         write_global_config()
-        if not midid.is_started:
-            a2jmidid.set_disable_port_uniqueness(btn._pressed)
+        if not midid.started:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(
+                diw.a2j_midid.call_set_disable_port_uniqueness(btn._pressed)
+            )
             super().on_press()
 a2jmidid_uniqueness_btn = btns.add(
     'main',
@@ -821,7 +536,7 @@ midid_started_btn = btns.add(
     ),
     size=20,
     x=230, y=status_btn_y(10),
-    is_on=a2jmidid.is_started(), is_radio=False, is_enabled=False,
+    is_on=False, is_radio=False, is_enabled=False,
 )
 midid_ehw_btn = btns.add(
     'main',
@@ -833,7 +548,7 @@ midid_ehw_btn = btns.add(
     ),
     size=15,
     x=340, y=status_btn_y(10),
-    is_on=a2jmidid.get_hw_export(), is_radio=False, is_enabled=False,
+    is_on=False, is_radio=False, is_enabled=False,
 )
 midid_uniq_btn = btns.add(
     'main',
@@ -845,8 +560,7 @@ midid_uniq_btn = btns.add(
     ),
     size=15,
     x=400, y=status_btn_y(10),
-    is_on=not a2jmidid.get_disable_port_uniqueness(),
-    is_radio=False, is_enabled=False,
+    is_on=False, is_radio=False, is_enabled=False,
 )
 
 # next pulse2jack
@@ -885,70 +599,8 @@ p2j_started_btn = btns.add(
     is_on=True, is_radio=False, is_enabled=False,
 )
 
-def come_on_start():
-    d_jack.StartServer()
-    if global_config.getboolean('a2j_bridge', 'autostart'):
-        if global_config.get('a2j_bridge', 'tool') == 'jack_examples':
-            if not aloop_started():
-                if check_kernel_SND_ALOOP():
-                    start_aloop()
-            connect_aloop()
-    if global_config.getboolean('a2jmidid', 'autostart'):
-        midid.start()
-
-def now_stop_them():
-    print('stopping a2j, a2jmidid, jack')
-    a2j_bridge.Stop(True, True)
-    midid.stop()
-    d_jack.StopServer()
-
-def force_restart():
-    now_stop_them()
-    a2j_bridge.Kill()
-    try:
-        print('killing jack: ', d_jack.Exit())
-        for _ in range(20):
-            pyglet.app.event_loop.sleep(0.05)
-    except DBusException as exc:
-        print('caught', exc)
-        ...  # tells didn't answer
-        ...  # doesn't tell it anymore...
-    # so we can reconnect
-    # fucc, we can't anymore
-    #GDbus.close()
-    dbus_reconnect()
-    print('starting jack: ', come_on_start())
 
 
-dbus_buttons = {
-    start_status_btn: come_on_start,
-    stop_status_btn: now_stop_them,
-    force_restart_status_btn: force_restart,
-    reset_xruns_status_btn: d_jack.ResetXruns,
-    switch_master_status_btn: d_jack.SwitchMaster,
-}
-
-
-def get_info():  # through dbus
-    try:
-        msg = None
-        dsp_status_val.text = f'{d_jack.GetLoad():.2f}%'
-    except DBusException as exc:
-        msg = str(exc)
-    if msg is None:
-        try:
-            server_status_val.text = 'Started'
-            xruns_status_val.text = f'{d_jack.GetXruns()}'
-            buffer_size_status_val.text = f'{d_jack.GetBufferSize()} samples'
-            rt_status_val.text = 'Yes' if d_jack.IsRealtime() else 'No'
-            sr_status_val.text = f'{d_jack.GetSampleRate()} Hz'
-            bl_status_val.text = f'{d_jack.GetLatency():.2f} ms'
-        except DBusException as exc:
-            msg = str(exc)
-    if msg is not None:
-        dsp_status_val.text = msg
-        server_status_val.text = 'Stopped'\
-            if 'ServerNotRunning' in msg else 'Unknown'
 
 # configure UI elements
 configure_text = Label(
@@ -958,63 +610,6 @@ configure_text = Label(
 )
 
 
-def outline_config(w):
-    consts = None
-    def hack_walrus(s):
-        nonlocal consts
-        consts = jackcfg.GetParameterConstraint([w, s])
-        return consts[3]
-    return {
-        str(s): (o := {
-            'description': str(jackcfg.GetParameterInfo([w, s])[2]),
-            'constraints': {
-                str(con[1]): con[0]
-                for con in hack_walrus(s)
-            },
-            'getter': partial(
-                (lambda s_: jackcfg.GetParameterValue([w, s_])),
-                s
-            ),
-            'setter': partial(
-                (lambda s_, v: jackcfg.SetParameterValue([w, s_], v)),
-                s
-            ),
-            'retter': partial(
-                (lambda s_: jackcfg.ResetParameterValue([w, s_])),
-                s
-            ),
-        })
-        and o['constraints'].update({'is_range': bool(consts[0])}) or True
-        and o['constraints'].update({'is_strict': bool(consts[1])}) or True
-        and o['constraints'].update({'is_fake_value': bool(consts[2])})
-        or o
-        for s in jackcfg.ReadContainer([w])[1]
-    }
-engine_features = outline_config('engine')
-#for k, v in engine_features.items():
-#    print(k, v)
-#    if v['constraints']['is_strict']:
-#        print(f'engine.{k}: {v["constraints"]}')
-driver_features = outline_config('driver')
-#for k, v in driver_features.items():
-#    if v['constraints']['is_strict']:
-#        print(f'driver.{k}: {v["constraints"]}')
-
-# labels and values shown in GUI fetched from dbus
-#print(engine_features.keys())
-# get everything filtering for by type and also store defaults
-for feat_name, feat in engine_features.items():
-    is_set, default, value = feat['getter']()
-    feat['default'] = default
-    feat['is_bool'] = isinstance(value, dbus.Boolean)
-    feat['is_uint32'] = isinstance(value, dbus.UInt32)
-    feat['is_int32'] = isinstance(value, dbus.Int32)
-for feat_name, feat in driver_features.items():
-    is_set, default, value = feat['getter']()
-    feat['default'] = default
-    feat['is_bool'] = isinstance(value, dbus.Boolean)
-    feat['is_uint32'] = isinstance(value, dbus.UInt32)
-    feat['is_int32'] = isinstance(value, dbus.Int32)
 cfg_engine_toggles = {}
 i = 0
 
@@ -1029,8 +624,8 @@ relabeling = {
     'sync': 'Server Syncronous Mode',
     'replace-registry': 'Replace Shared Memory Registry',
 }
-for feat_name, feat in engine_features.items():
-    if feat['is_bool']:
+for feat_name, feat in features['engine'].items():
+    if feat.variant == 'b':  # boolean
         i += 1
         cfg_engine_toggles[feat_name] = {
             'btn': (btn := btns.add(
@@ -1049,14 +644,14 @@ for feat_name, feat in engine_features.items():
         }
         btn.feat_name = feat_name
 
-cfg_sin_clock_source_feat = engine_features['clock-source']
+cfg_sin_clock_source_feat = features['engine']['clock-source']
 # ... 'Clocksource type : c(ycle) | h(pet) | s(ystem).'
 cs_re = re.compile(r'\s*([a-zA-Z])(\([a-zA-z]*\))\s*')
 
 cfg_sin_clock_source_cfg = {
     f'{mg[0]}{mg[1][1:-1]}'
     : ord(mg[0])
-    for t in cfg_sin_clock_source_feat['description'].split(
+    for t in cfg_sin_clock_source_feat.description.split(
         ':', 1)[1].split('|')
     if (matched := cs_re.match(t)) and (mg := matched.groups())
 }
@@ -1091,12 +686,10 @@ cfg_title_scm = Label(
     font_name='monospace',
     batch=cfg_engine_labels,
 )
-self_connect_modes = engine_features['self-connect-mode']['constraints'].items()
+self_connect_modes = features['engine']['self-connect-mode'].constraints.items()
 for i, kv in enumerate(self_connect_modes):
     text, val = kv
-    if text in ('is_range', 'is_strict', 'is_fake_value'):
-        break  # break altogeter then, they're at the end
-
+    val = val.value
     scm_btn = btns.add(
         'engine',
         Label(
@@ -1124,12 +717,12 @@ class IntegerEntry(TextEntry):
 
 i = 0
 cfg_engine_integers = {}
-for feat_name, feat in engine_features.items():
-    if (feat['is_uint32'] or feat['is_int32']) and feat_name != 'clock-source':
+for feat_name, feat in features['engine'].items():
+    if feat.variant in 'ui' and feat_name != 'clock-source':
         i += 1
         cfg_engine_integers[feat_name] = {
             'integer_entry': IntegerEntry(
-                str(int(feat['getter']()[2])),
+                str(feat.value.value),
                 x=cfg_int_x(i), y=cfg_int_y(i),
                 width=50,
                 color=(0xcc, 0xcc, 0xcc, 0xff),
@@ -1155,8 +748,8 @@ relabeling = {
     'monitor':  'Software Monitoring',
     'shorts':   'Force 16-bit mode',
 }
-for feat_name, feat in driver_features.items():
-    if feat['is_bool']:
+for feat_name, feat in features['driver'].items():
+    if feat.variant == 'b':
         i += 1
         cfg_driver_toggles[feat_name] = {
             'btn': (btn := btns.add(
@@ -1185,8 +778,7 @@ asdaishdoa = Label(
     font_name='monospace',
     batch=cfg_driver_labels,
 )
-for con_txt, con_byte in driver_features['dither']['constraints'].items():
-    if con_txt.startswith('is_'): continue
+for con_txt, con_byte in features['driver']['dither'].constraints.items():
     xo = j * 80 - (0 if j == 0 else 20)
     dither_btn = btns.add(
         'driver',
@@ -1199,7 +791,7 @@ for con_txt, con_byte in driver_features['dither']['constraints'].items():
         x=cfg_btn_x(i) + xo, y=cfg_btn_y(i, window.height - 50) - 20,
         size=20,
         is_on=False, is_radio='dither', is_enabled=True,
-        value=int(con_byte),
+        value=int(con_byte.value),
     )
     j += 1
 
@@ -1211,13 +803,12 @@ ygsaugaysu = Label(
     font_name='monospace',
     batch=cfg_driver_labels,
 )
-for con_txt, con_str in driver_features['midi-driver']['constraints'].items():
-    if con_txt.startswith('is_'): continue
+for con_txt, con_str in features['driver']['midi-driver'].constraints.items():
     xo = j * 80 - (0 if j == 0 else 20)
     midi_btn = btns.add(
         'driver',
         Label(
-            str(con_str),
+            con_str.value,
             x=cfg_btnl_x(i) + xo, y=cfg_btnl_y(i, window.height - 50) - 20,
             font_name='monospace',
             batch=cfg_driver_labels,
@@ -1225,7 +816,7 @@ for con_txt, con_str in driver_features['midi-driver']['constraints'].items():
         x=cfg_btn_x(i) + xo, y=cfg_btn_y(i, window.height - 50) - 20,
         size=20,
         is_on=False, is_radio='midi-driver', is_enabled=True,
-        value=str(con_str),
+        value=con_str.value,
     )
     j += 1
 
@@ -1351,12 +942,12 @@ relabeling = {
     'period': 'Frame Size',
     'rate': 'Sample Rate',
 }
-for feat_name, feat in driver_features.items():
-    if feat['is_uint32'] or feat['is_int32']:
+for feat_name, feat in features['driver'].items():
+    if feat.variant in 'ui':
         i += 1
         cfg_driver_integers[feat_name] = {
             'integer_entry': IntegerEntry(
-                str(int(feat['getter']()[2])),
+                str(int(feat.value.value)),
                 x=cfg_int_x(i), y=cfg_int_y(i),
                 width=50,
                 color=(0xcc, 0xcc, 0xcc, 0xff),
@@ -1378,97 +969,100 @@ class CancelBtn(SinButton):
         navigation.to_main()
 
 class ResetBtn(SinButton):
-    def on_press(_):
-        engine_features['clock-source']['retter']()
-        engine_features['self-connect-mode']['retter']()
+    def on_press(self):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self._on_press())
+        navigation.to_main()
+    async def _on_press(_):
+        await features['engine']['clock-source'].reset()
+        await features['engine']['self-connect-mode'].reset()
         for feat_name, thing in cfg_engine_toggles.items():
-            engine_features[feat_name]['retter']()
+            await features['engine'][feat_name].reset()
             thing['btn'].modified = False
         for feat_name, thing in cfg_engine_integers.items():
-            engine_features[feat_name]['retter']()
+            await features['engine'][feat_name].reset()
             thing['integer_entry'].modified = False
         clk_btn.mark_group_as_not_modified()
         scm_btn.mark_group_as_not_modified()
         # ok, driver now
         for feat_name, thing in cfg_driver_toggles.items():
-            driver_features[feat_name]['retter']()
+            await features['driver'][feat_name].reset()
             thing['btn'].modified = False
         for feat_name, thing in cfg_driver_integers.items():
-            driver_features[feat_name]['retter']()
+            await features['driver'][feat_name].reset()
             thing['integer_entry'].modified = False
-        driver_features['dither']['retter']()
+        await features['driver']['dither'].reset()
         dither_btn.mark_group_as_not_modified()
-        driver_features['midi-driver']['retter']()
+        await features['driver']['midi-driver'].reset()
         midi_btn.mark_group_as_not_modified()
-        driver_features['device']['retter']()
+        await features['driver']['device'].reset()
         duplex_btn.mark_group_as_not_modified()
-        driver_features['capture']['retter']()
+        await features['driver']['capture'].reset()
         capture_btn.mark_group_as_not_modified()
-        driver_features['playback']['retter']()
+        await features['driver']['playback'].reset()
         playback_btn.mark_group_as_not_modified()
-        navigation.to_main()
 
 class SaveBtn(SinButton):
-    def on_press(_):
+    def on_press(self):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self._on_press())
+        navigation.to_main()
+    async def _on_press(_):
         if clk_btn.modified:
             try:
-                engine_features['clock-source']['setter'](
-                    dbus.UInt32(clk_btn.value)
-                )
+                await features['engine']['clock-source'].set(Variant('i', clk_btn.value))
                 clk_btn.mark_group_as_not_modified()
                 print(f'set engine.clock-source: {clk_btn.value}')
             except DBusException as exc:
                 msg = f'Error setting up engine parameter "clock-source"\n{exc}'
-                on_error(msg)
+                error_dialog(msg, title='Failed')
         if scm_btn.modified:
-            #print(type(cfg_sin_self_connect_mode.value['value']))
-            engine_features['self-connect-mode']['setter'](scm_btn.value)
+            await features['engine']['self-connect-mode'].set(Variant('i', scm_btn.value))
             scm_btn.mark_group_as_not_modified()
             print(f'set engine.self-connect-mode: {scm_btn.value}')
         for feat_name, thing in cfg_engine_toggles.items():
             btn = thing['btn']
             if btn.modified:
                 print(f'set engine.{feat_name}: {btn._pressed}')
-                engine_features[feat_name]['setter'](dbus.Boolean(btn._pressed))
+                await features['engine'][feat_name].set(Variant('b', btn._pressed))
                 btn.modified = False
         for feat_name, thing in cfg_engine_integers.items():
             if (te := thing['integer_entry']).modified:
                 print(f'set (int) engine.{feat_name}: {te.value}')
-                engine_features[feat_name]['setter'](dbus.UInt32(te.value))
+                await features['engine'][feat_name].set(Variant('i', int(te.value)))
                 te.modified = False
         # ok, driver now
         for feat_name, thing in cfg_driver_toggles.items():
             btn = thing['btn']
             if btn.modified:
                 print(f'set driver.{feat_name}: {btn._pressed}')
-                driver_features[feat_name]['setter'](dbus.Boolean(btn._pressed))
+                await features['driver'][feat_name].set(Variant('b', btn._pressed))
                 btn.modified = False
         for feat_name, thing in cfg_driver_integers.items():
             if (te := thing['integer_entry']).modified:
                 print(f'set (int) driver.{feat_name}: {te.value}')
-                driver_features[feat_name]['setter'](dbus.UInt32(te.value))
+                await features['driver'][feat_name].set(Variant('u', int(te.value)))
                 te.modified = False
         if dither_btn.modified:
-            driver_features['dither']['setter'](dither_btn.value)
+            await features['driver']['dither'].set(Variant('i', dither_btn.value))
             dither_btn.mark_group_as_not_modified()
             print(f'set driver.dither: {dither_btn.value}')
         if midi_btn.modified:
-            driver_features['midi-driver']['setter'](midi_btn.value)
+            await features['driver']['midi-driver'].set(Variant('i', midi_btn.value))
             midi_btn.mark_group_as_not_modified()
             print(f'set driver.midi-driver: {midi_btn.value}')
         if duplex_btn.modified:
-            driver_features['device']['setter'](duplex_btn.value)
+            await features['driver']['device'].set(Variant('s', duplex_btn.value))
             duplex_btn.mark_group_as_not_modified()
             print(f'set driver.device: {duplex_btn.value}')
         if capture_btn.modified:
-            driver_features['capture']['setter'](capture_btn.value)
+            await features['driver']['capture'].set(Variant('s', capture_btn.value))
             capture_btn.mark_group_as_not_modified()
             print(f'set driver.capture: {capture_btn.value}')
         if playback_btn.modified:
-            driver_features['playback']['setter'](playback_btn.value)
+            await features['driver']['playback'].set(Variant('s', playback_btn.value))
             playback_btn.mark_group_as_not_modified()
             print(f'set driver.playback: {playback_btn.value}')
-        navigation.to_main()
 
 cancel_btn = btns.add(
     'engine|driver',
@@ -1553,7 +1147,10 @@ def patch_set_active(self, screen_name):
                 continue
             btn.is_active = name == screen_name
     if screen_name == 'driver':
-        update_driver_gui_booleans()  # quick hack
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(
+            update_driver_gui_booleans()  # quick hack
+        )
         duplex = cfg_driver_toggles['duplex']['btn']._pressed
         self.set_duplex_side_effect(duplex)
     else:
@@ -1569,7 +1166,7 @@ def set_duplex_side_effect(self, on):
 btns.set_active = partial(patch_set_active, btns)
 btns.set_duplex_side_effect = partial(set_duplex_side_effect, btns)
 
-def update_engine_gui_state_clock_selection():
+async def update_engine_gui_state_clock_selection():
     # we receive 0 1 2 instead of c h s
     # so I did set hpet in cadence and dbus said it's 2
     # cadence is doing some dance and keeps using maps like so
@@ -1588,7 +1185,7 @@ def update_engine_gui_state_clock_selection():
     # - we use s/h and you won't be able to change that from cadence anymore
     # - 0, 1 and 2 are all normalized to s (to fixup 1 is h instead of c)
     if not clk_btn.modified:
-        clock = int(cfg_sin_clock_source_feat['getter']()[2])
+        clock = int((await cfg_sin_clock_source_feat.get())[2].value)
         if clock in (0, 1, 2):
             clock_selection = 'broken'
         elif clock in (ord('s'), ord('h')):
@@ -1604,99 +1201,107 @@ def update_engine_gui_state_clock_selection():
         clk_btn.value = _clock
         clk_btn.mark_group_as_not_modified()
 
-def update_engine_gui_self_connect_mode():
+async def update_engine_gui_self_connect_mode():
     if not scm_btn.modified:
-        actual = int(engine_features['self-connect-mode']['getter']()[2])
+        actual = int((await features['engine']['self-connect-mode'].get())[2].value)
         scm_btn.value = actual
         scm_btn.mark_group_as_not_modified()
 
-def update_engine_gui_booleans():
+async def update_engine_gui_booleans():
     for thing in cfg_engine_toggles.values():
         btn = thing['btn']
         if not btn.modified:
-            actual = bool(engine_features[btn.feat_name]['getter']()[2])
+            actual = bool((await features['engine'][btn.feat_name].get())[2].value)
             btn.toggle(actual)
             btn.modified = False
 
-def update_engine_gui_integers():
+async def update_engine_gui_integers():
     #return
     for feat_name, thing in cfg_engine_integers.items():
         if not thing['integer_entry'].modified and not thing['integer_entry'].focus:
-            thing['integer_entry'].value = str(int(engine_features[feat_name]['getter']()[2]))
+            thing['integer_entry'].value = str(int(
+                (await features['engine'][feat_name].get())[2].value
+            ))
 
-def update_engine_gui_state():
+async def update_engine_gui_state():
     # we poll dbus and update the GUI unless modified
     # modifying doesn't immediatly set the value on dbus
     # that's done through a save button
     # once a value is modified on the gui polling for that one stops
     # until save/reset/cancel is pressed
-    update_engine_gui_state_clock_selection()
-    update_engine_gui_self_connect_mode()
-    update_engine_gui_booleans()
-    update_engine_gui_integers()
+    await update_engine_gui_state_clock_selection()
+    await update_engine_gui_self_connect_mode()
+    await update_engine_gui_booleans()
+    await update_engine_gui_integers()
 
-def update_driver_gui_booleans():
+async def update_driver_gui_booleans():
     for thing in cfg_driver_toggles.values():
         btn = thing['btn']
         if not btn.modified:
-            actual = bool(driver_features[btn.feat_name]['getter']()[2])
+            actual = bool((await features['driver'][btn.feat_name].get())[2].value)
             btn.toggle(actual)
             btn.modified = False
 
-def update_driver_gui_integers():
+async def update_driver_gui_integers():
     for feat_name, thing in cfg_driver_integers.items():
         if not thing['integer_entry'].modified and not thing['integer_entry'].focus:
-            thing['integer_entry'].value = str(int(driver_features[feat_name]['getter']()[2]))
+            thing['integer_entry'].value = str(int(
+                (await features['driver'][feat_name].get())[2].value
+            ))
 
-def update_driver_gui_dither():
+async def update_driver_gui_dither():
     if not dither_btn.modified:
-        actual = int(driver_features['dither']['getter']()[2])
+        actual = int((await features['driver']['dither'].get())[2].value)
         dither_btn.value = actual
         dither_btn.mark_group_as_not_modified()
 
-def update_driver_gui_midi():
+async def update_driver_gui_midi():
     if not midi_btn.modified:
-        actual = str(driver_features['midi-driver']['getter']()[2])
+        actual = (await features['driver']['midi-driver'].get())[2].value
         midi_btn.value = actual
         midi_btn.mark_group_as_not_modified()
 
-def update_driver_gui_devices():
+async def update_driver_gui_devices():
     if cfg_driver_toggles['duplex']['btn']._pressed:
         if not duplex_btn.modified:
-            actual = str(driver_features['device']['getter']()[2])
+            actual = (await features['driver']['device'].get())[2].value
             duplex_btn.value = actual
             duplex_btn.mark_group_as_not_modified()
     else:
         if not capture_btn.modified:
-            actual = str(driver_features['capture']['getter']()[2])
+            actual = (await features['driver']['capture'].get())[2].value
             capture_btn.value = actual
             capture_btn.mark_group_as_not_modified()
         if not playback_btn.modified:
-            actual = str(driver_features['playback']['getter']()[2])
+            actual = (await features['driver']['playback'].get())[2].value
             playback_btn.value = actual
             playback_btn.mark_group_as_not_modified()
 
-def update_driver_gui_state():
-    update_driver_gui_booleans()
-    update_driver_gui_integers()
-    update_driver_gui_dither()
-    update_driver_gui_midi()
+async def update_driver_gui_state():
+    await update_driver_gui_booleans()
+    await update_driver_gui_integers()
+    await update_driver_gui_dither()
+    await update_driver_gui_midi()
     try:
-        update_driver_gui_devices()
+        await update_driver_gui_devices()
     except ValueError as exc:
         print(str(exc), file=stderr)
 
-def midid_update():
-    if midid.is_started:
-        midid_ehw_btn.toggle(a2jmidid.get_hw_export())
-        midid_uniq_btn.toggle(not a2jmidid.get_disable_port_uniqueness())
-        a2jmidid_export_hw_btn.is_enabled = False
-        a2jmidid_uniqueness_btn.is_enabled = False
-    else:
-        midid_ehw_btn.toggle(False)
-        midid_uniq_btn.toggle(False)
-        a2jmidid_export_hw_btn.is_enabled = True
-        a2jmidid_uniqueness_btn.is_enabled = True
+
+async def update_main():
+    match navigation.name:
+        case 'main':
+            await get_info()
+            await aloop_started()
+            await aloop_connected()
+            await midid_update()
+        case 'engine':
+            await update_engine_gui_state()
+        case 'driver':
+            await update_driver_gui_state()
+        case _:
+            assert False, f'how to update {navigation.name}?'
+
 
 def draw_main():
     window.clear()
@@ -1729,25 +1334,13 @@ def draw_configure_driver():
 def on_draw():
     match navigation.name:
         case 'main':
-            get_info()
-            aloop_started()
-            aloop_connected()
-            midid_update()
             draw_main()
         case 'engine':
-            update_engine_gui_state()
             draw_configure()
         case 'driver':
-            update_driver_gui_state()
             draw_configure_driver()
         case _:
             assert False, f'how to draw {navigation.name}?'
-
-def on_dbus_error(msg):
-    print(msg, file=stderr)
-    error_dialog(msg)
-    if 'org.freedesktop.DBus.Error.NoReply' in msg:
-        dbus_reconnect()
 
 
 @window.event
@@ -1781,24 +1374,37 @@ def on_resize(x, y):
     configure_status_btn.position = status_btn_x(), status_btn_y(6)
     configure_status_btn_label.position = status_btnl_x(), status_btnl_y(6), 1
 
-once = True
-while once:
-    once = False
-    try:
-        # famerate is also for dbus polling
-        #pyglet.app.run(.2)  # why should you redraw this thing @60Hz?
-        navigation.to_main()
-        pyglet.app.run(.05)  # why should you redraw this thing @60Hz?
-        # a redraw each 100ms (10Hz) seems even too fast to me
-        # actually changed to 5 times per second.
-    except DBusException as exc:
-        print(str(exc), file=stderr)
-        error_dialog(str(exc), title='Unexpected Error')
-        server_status_val.text = 'DEAD'
-        once = True
-        if 'org.freedesktop.DBus.Error.ServiceUnknown' in str(exc):
-            dbus_reconnect()
+# monkepatch gui to solve circular dependency
+dclients.gui = type('GUI', tuple(), {
+    'error_dialog': error_dialog,
+    'midid_started_btn': midid_started_btn,
+    'server_status_val': server_status_val,
+    'dsp_status_val': dsp_status_val,
+    'xruns_status_val': xruns_status_val,
+    'buffer_size_status_val': buffer_size_status_val,
+    'rt_status_val': rt_status_val,
+    'sr_status_val': sr_status_val,
+    'bl_status_val': bl_status_val,
+    #
+    'aloop_started_btn': aloop_started_btn,
+    'aloop_connected_btn': aloop_connected_btn,
+    'midid_ehw_btn': midid_ehw_btn,
+    'midid_uniq_btn': midid_uniq_btn,
+    'a2jmidid_export_hw_btn': a2jmidid_export_hw_btn,
+    'a2jmidid_uniqueness_btn': a2jmidid_uniqueness_btn,
+})
 
-print("So you closed the window... Well i'm atexit")
-print("SIGINT will kill any bridge, that's on you")
+async def initialize_midid():
+    midid.started = await diw.a2j_midid.call_is_started()
+asyncio.get_event_loop().run_until_complete(initialize_midid())
 
+def update_loop(dt):
+    #asyncio.run_coroutine_threadsafe(
+    #    update_main(),
+    #    asyncio.get_event_loop()
+    #)
+    asyncio.get_event_loop().run_until_complete(update_main())
+
+navigation.to_main()
+pyglet.clock.schedule_interval(update_loop, 1)
+pyglet.app.run(.05)  # why should you redraw this thing @60Hz?
