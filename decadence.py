@@ -1309,6 +1309,7 @@ def draw_main():
     batch_status.draw()
     btns.batch.draw()
     batch_status_btnl.draw()
+    livedsp.batch.draw()
 
 def draw_configure():
     window.clear()
@@ -1399,13 +1400,106 @@ async def initialize_midid():
 asyncio.get_event_loop().run_until_complete(initialize_midid())
 
 def update_loop(dt):
-    #asyncio.run_coroutine_threadsafe(
-    #    update_main(),
-    #    asyncio.get_event_loop()
-    #)
     asyncio.get_event_loop().run_until_complete(update_main())
+
+def update_livedsp_loop(dt):
+    asyncio.get_event_loop().run_until_complete(update_livedsp())
+
+class LiveDspLoadGraph:
+    vertex_source = """
+#version 330 core
+in float load_value;
+
+uniform vec2 position;
+uniform float size;
+uniform float height;
+
+uniform WindowBlock { mat4 projection; mat4 view; } window;
+
+out float geox;
+
+void main() {
+    geox = position.x + size * gl_VertexID;
+    vec4 pos = vec4(
+        vec2(
+            geox,
+            position.y + load_value / 100 * height
+        ),
+        0.0,
+        1.0
+    );
+    gl_Position = window.projection * window.view * pos;
+    //geox = gl_Position.x;  // well, actually this one is mapped to screen
+}
+    """
+    geometry_source = """
+#version 330 core
+layout (points) in;
+layout (line_strip, max_vertices = 2) out;
+
+in float[] geox;
+uniform WindowBlock { mat4 projection; mat4 view; } window;
+
+void main() {
+    gl_Position = gl_in[0].gl_Position;
+    EmitVertex();
+    gl_Position = vec4(geox[0], 0, 0, 1);
+    gl_Position = window.projection * window.view * gl_Position;
+    EmitVertex();
+    EndPrimitive();
+}
+    """
+    fragment_source = """
+#version 330 core
+void main() {
+    gl_FragColor = vec4(1.0);
+}
+    """
+    def __init__(self, size=5, timespan=60, height=200, sweep=10):
+        self.size = size
+        self.count = window.width // self.size
+        self.interval = timespan / self.count
+        self.i = 0
+        self.sweep = sweep
+        self.program = pyglet.gl.current_context.create_program(
+            (self.vertex_source, 'vertex'),
+            (self.geometry_source, 'geometry'),
+            (self.fragment_source, 'fragment'),
+        )
+        self.program['size'] = self.size
+        self.program['height'] = self.height = height
+        self.program['position'] = (0, 0)#self.height)
+        values = [0] * self.count
+        self.batch = pyglet.graphics.Batch()
+        self.vertices = self.program.vertex_list(
+            self.count,
+            pyglet.gl.GL_POINTS,
+            batch=self.batch,
+            load_value=('f', values),
+        )
+
+    def push(self, new):
+        self.i += 1
+        if self.i == self.count:
+            self.i = 0
+        self.vertices.load_value[self.i] = new
+        # Implement some freshness, otherwise it's hard to tell it's sweeping
+        off = self.count - self.i - 1
+        self.vertices.load_value[self.i+1:self.i+self.sweep + 1] = [0] * min(off, self.sweep)
+        if (siz := self.sweep - off) >= 1:
+            self.vertices.load_value[:siz] = [0] * siz
+
+livedsp = LiveDspLoadGraph(height=150, timespan=60)
+
+async def update_livedsp():
+    livedsp.push(
+        await diw.jack_ctrl.call_get_load()
+        if graph.server_started
+        else 0
+    )
 
 navigation.to_main()
 update_loop(0)
 pyglet.clock.schedule_interval(update_loop, 1)
+pyglet.clock.schedule_interval(update_livedsp_loop, livedsp.interval)
 pyglet.app.run(.05)  # why should you redraw this thing @60Hz?
