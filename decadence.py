@@ -100,28 +100,6 @@ YELL = (0xcc, 0xca, 0x0b, 0xff)
 BLACK = (0x00, 0x00, 0x00, 0xff)
 
 
-'''
-# mhhh, a pyglet bug, https://github.com/pyglet/pyglet/blob/f93b602ea3dde726c6661aa8aaf7400d132f445a/pyglet/gui/widgets.py#L268
-# I'm keeping them but I'm not using them...
-from inspect import getsource
-for evt_name in ('on_mouse_leave', 'on_mouse_release'):
-    _source = getsource(getattr(PushButton, evt_name))
-    _source = '\n'.join(line[4:] for line in _source.replace(
-        "self.dispatch_event('on_release')",
-        "self.dispatch_event('on_release', self)",
-        # wrong event? missing self?  # just missing self!
-    ).replace(
-        # did they ever run this?
-        "if not self.enabled or not self._pressed",
-        "if not self.enabled and not self._pressed",
-    ).split('\n'))
-    print('Needed to execute this:', file=stderr)
-    print(_source, file=stderr)
-    exec(_source, (_glo := {}), (_loc := {}))
-    setattr(PushButton, evt_name, _loc[evt_name])
-'''
-
-
 # drawing disorder and order
 batch_status = pyglet.graphics.Batch()
 batch_status_btnl = pyglet.graphics.Batch()
