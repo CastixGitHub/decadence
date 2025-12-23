@@ -1,4 +1,5 @@
 import pyglet
+pyglet.options['debug_gl_shaders'] = True
 from pyglet.window import Window
 from pyglet.text import Label
 from pyglet.gui import TextEntry
@@ -1408,7 +1409,7 @@ def update_livedsp_loop(dt):
 class LiveDspLoadGraph:
     vertex_source = """
 #version 330 core
-in float load_value;
+layout(location = 0) in float load_value;
 
 uniform vec2 position;
 uniform float size;
@@ -1417,19 +1418,21 @@ uniform float height;
 uniform WindowBlock { mat4 projection; mat4 view; } window;
 
 out float geox;
+out vec3 geocolor;
 
 void main() {
     geox = position.x + size * gl_VertexID;
     vec4 pos = vec4(
         vec2(
             geox,
-            position.y + load_value / 100 * height
+            position.y + abs(load_value) / 100 * height
         ),
         0.0,
         1.0
     );
+    float fg = load_value == abs(load_value) ? 1. : 0.;
+    geocolor = vec3(1., fg, fg);
     gl_Position = window.projection * window.view * pos;
-    //geox = gl_Position.x;  // well, actually this one is mapped to screen
 }
     """
     geometry_source = """
@@ -1438,11 +1441,16 @@ layout (points) in;
 layout (line_strip, max_vertices = 2) out;
 
 in float[] geox;
+in vec3[] geocolor;
 uniform WindowBlock { mat4 projection; mat4 view; } window;
 
+out vec3 color;
+
 void main() {
+    color = geocolor[0];
     gl_Position = gl_in[0].gl_Position;
     EmitVertex();
+    color = geocolor[0];
     gl_Position = vec4(geox[0], 0, 0, 1);
     gl_Position = window.projection * window.view * gl_Position;
     EmitVertex();
@@ -1451,8 +1459,9 @@ void main() {
     """
     fragment_source = """
 #version 330 core
+in vec3 color;
 void main() {
-    gl_FragColor = vec4(1.0);
+    gl_FragColor = vec4(color, 1.0);
 }
     """
     def __init__(self, size=5, timespan=60, height=200, sweep=10):
@@ -1466,10 +1475,12 @@ void main() {
             (self.geometry_source, 'geometry'),
             (self.fragment_source, 'fragment'),
         )
+        # wtf mate, introspection failed silently?
         self.program['size'] = self.size
-        self.program['height'] = self.height = height
-        self.program['position'] = (0, 0)#self.height)
+        self.program['height'] = height
+        self.program['position'] = (0, 0)
         values = [0] * self.count
+        colors = [0] * self.count
         self.batch = pyglet.graphics.Batch()
         self.vertices = self.program.vertex_list(
             self.count,
@@ -1485,17 +1496,24 @@ void main() {
         self.vertices.load_value[self.i] = new
         # Implement some freshness, otherwise it's hard to tell it's sweeping
         off = self.count - self.i - 1
-        self.vertices.load_value[self.i+1:self.i+self.sweep + 1] = [0] * min(off, self.sweep)
+        self.vertices.load_value[self.i + 1 : self.i + self.sweep + 1] = \
+            [0] * min(off, self.sweep)
         if (siz := self.sweep - off) >= 1:
             self.vertices.load_value[:siz] = [0] * siz
 
-livedsp = LiveDspLoadGraph(height=150, timespan=60)
+livedsp = LiveDspLoadGraph(height=150, timespan=60, sweep=3)
+xrun_count = 0
 
 async def update_livedsp():
+    global xrun_count
+    flag = 1
+    if (new_xruns := await diw.jack_ctrl.call_get_xruns()) != xrun_count:
+        xrun_count = new_xruns
+        flag = -1
     livedsp.push(
-        await diw.jack_ctrl.call_get_load()
+        (await diw.jack_ctrl.call_get_load()) * flag
         if graph.server_started
-        else 0
+        else 0,
     )
 
 navigation.to_main()

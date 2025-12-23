@@ -1,0 +1,221 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node name="/org/jackaudio/Controller">
+  <interface name="org.freedesktop.DBus.Introspectable">
+      <method name="Introspect">
+          <arg name="xml_data" direction="out" type="s" />
+        </method>
+    </interface>
+    <interface name="org.jackaudio.JackControl">
+      <method name="IsStarted">
+          <arg name="started" direction="out" type="b" />
+        </method>
+        <method name="StartServer" />
+        <method name="StopServer" />
+        <method name="SwitchMaster" />
+        <method name="GetLoad">
+          <arg name="load" direction="out" type="d" />
+        </method>
+        <method name="GetXruns">
+          <arg name="xruns_count" direction="out" type="u" />
+        </method>
+        <method name="GetSampleRate">
+          <arg name="sample_rate" direction="out" type="u" />
+        </method>
+        <method name="GetLatency">
+          <arg name="latency_ms" direction="out" type="d" />
+        </method>
+        <method name="GetBufferSize">
+          <arg name="buffer_size_frames" direction="out" type="u" />
+        </method>
+        <method name="SetBufferSize">
+          <arg name="buffer_size_frames" direction="in" type="u" />
+        </method>
+        <method name="IsRealtime">
+          <arg name="realtime" direction="out" type="b" />
+        </method>
+        <method name="ResetXruns" />
+        <method name="LoadInternal">
+          <arg name="internal" direction="in" type="s" />
+        </method>
+        <method name="UnloadInternal">
+          <arg name="internal" direction="in" type="s" />
+        </method>
+        <method name="AddSlaveDriver">
+          <arg name="driver_name" direction="in" type="s" />
+        </method>
+        <method name="RemoveSlaveDriver">
+          <arg name="driver_name" direction="in" type="s" />
+        </method>
+        <signal name="ServerStarted" />
+        <signal name="ServerStopped" />
+    </interface>
+    <interface name="org.jackaudio.Configure">
+      <method name="ReadContainer">
+          <arg name="parent" direction="in" type="as" />
+            <arg name="leaf" direction="out" type="b" />
+            <arg name="children" direction="out" type="as" />
+        </method>
+        <method name="GetParametersInfo">
+          <arg name="parent" direction="in" type="as" />
+            <arg name="parameter_info_array" direction="out" type="a(ysss)" />
+        </method>
+        <method name="GetParameterInfo">
+          <arg name="parameter" direction="in" type="as" />
+            <arg name="parameter_info" direction="out" type="(ysss)" />
+        </method>
+        <method name="GetParameterConstraint">
+          <arg name="parameter" direction="in" type="as" />
+            <arg name="is_range" direction="out" type="b" />
+            <arg name="is_strict" direction="out" type="b" />
+            <arg name="is_fake_value" direction="out" type="b" />
+            <arg name="values" direction="out" type="a(vs)" />
+        </method>
+        <method name="GetParameterValue">
+          <arg name="parameter" direction="in" type="as" />
+            <arg name="is_set" direction="out" type="b" />
+            <arg name="default" direction="out" type="v" />
+            <arg name="value" direction="out" type="v" />
+        </method>
+        <method name="SetParameterValue">
+          <arg name="parameter" direction="in" type="as" />
+            <arg name="value" direction="in" type="v" />
+        </method>
+        <method name="ResetParameterValue">
+          <arg name="parameter" direction="in" type="as" />
+        </method>
+    </interface>
+    <interface name="org.jackaudio.JackPatchbay">
+      <method name="GetAllPorts">
+          <arg name="ports_list" direction="out" type="as" />
+        </method>
+        <method name="GetGraph">
+          <arg name="known_graph_version" direction="in" type="t" />
+            <arg name="current_graph_version" direction="out" type="t" />
+            <arg name="clients_and_ports" direction="out" type="a(tsa(tsuu))" />
+            <arg name="connections" direction="out" type="a(tstststst)" />
+        </method>
+        <method name="ConnectPortsByName">
+          <arg name="client1_name" direction="in" type="s" />
+            <arg name="port1_name" direction="in" type="s" />
+            <arg name="client2_name" direction="in" type="s" />
+            <arg name="port2_name" direction="in" type="s" />
+        </method>
+        <method name="ConnectPortsByID">
+          <arg name="port1_id" direction="in" type="t" />
+            <arg name="port2_id" direction="in" type="t" />
+        </method>
+        <method name="DisconnectPortsByName">
+          <arg name="client1_name" direction="in" type="s" />
+            <arg name="port1_name" direction="in" type="s" />
+            <arg name="client2_name" direction="in" type="s" />
+            <arg name="port2_name" direction="in" type="s" />
+        </method>
+        <method name="DisconnectPortsByID">
+          <arg name="port1_id" direction="in" type="t" />
+            <arg name="port2_id" direction="in" type="t" />
+        </method>
+        <method name="DisconnectPortsByConnectionID">
+          <arg name="connection_id" direction="in" type="t" />
+        </method>
+        <method name="GetClientPID">
+          <arg name="client_id" direction="in" type="t" />
+            <arg name="process_id" direction="out" type="x" />
+        </method>
+        <signal name="GraphChanged">
+          <arg name="new_graph_version" direction="out" type="t" />
+        </signal>
+        <signal name="ClientAppeared">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="client_id" direction="out" type="t" />
+            <arg name="client_name" direction="out" type="s" />
+        </signal>
+        <signal name="ClientDisappeared">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="client_id" direction="out" type="t" />
+            <arg name="client_name" direction="out" type="s" />
+        </signal>
+        <signal name="PortAppeared">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="client_id" direction="out" type="t" />
+            <arg name="client_name" direction="out" type="s" />
+            <arg name="port_id" direction="out" type="t" />
+            <arg name="port_name" direction="out" type="s" />
+            <arg name="port_flags" direction="out" type="u" />
+            <arg name="port_type" direction="out" type="u" />
+        </signal>
+        <signal name="PortDisappeared">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="client_id" direction="out" type="t" />
+            <arg name="client_name" direction="out" type="s" />
+            <arg name="port_id" direction="out" type="t" />
+            <arg name="port_name" direction="out" type="s" />
+        </signal>
+        <signal name="PortsConnected">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="client1_id" direction="out" type="t" />
+            <arg name="client1_name" direction="out" type="s" />
+            <arg name="port1_id" direction="out" type="t" />
+            <arg name="port1_name" direction="out" type="s" />
+            <arg name="client2_id" direction="out" type="t" />
+            <arg name="client2_name" direction="out" type="s" />
+            <arg name="port2_id" direction="out" type="t" />
+            <arg name="port2_name" direction="out" type="s" />
+            <arg name="connection_id" direction="out" type="t" />
+        </signal>
+        <signal name="PortsDisconnected">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="client1_id" direction="out" type="t" />
+            <arg name="client1_name" direction="out" type="s" />
+            <arg name="port1_id" direction="out" type="t" />
+            <arg name="port1_name" direction="out" type="s" />
+            <arg name="client2_id" direction="out" type="t" />
+            <arg name="client2_name" direction="out" type="s" />
+            <arg name="port2_id" direction="out" type="t" />
+            <arg name="port2_name" direction="out" type="s" />
+            <arg name="connection_id" direction="out" type="t" />
+        </signal>
+        <signal name="PortRenamed">
+          <arg name="new_graph_version" direction="out" type="t" />
+            <arg name="port_id" direction="out" type="t" />
+            <arg name="client_id" direction="out" type="t" />
+            <arg name="client_name" direction="out" type="s" />
+            <arg name="port_old_name" direction="out" type="s" />
+            <arg name="port_new_name" direction="out" type="s" />
+        </signal>
+    </interface>
+    <interface name="org.jackaudio.SessionManager">
+      <method name="Notify">
+          <arg name="queue" direction="in" type="b" />
+            <arg name="target" direction="in" type="s" />
+            <arg name="type" direction="in" type="u" />
+            <arg name="path" direction="in" type="s" />
+            <arg name="result" direction="out" type="a(sssu)" />
+        </method>
+        <method name="GetUuidForClientName">
+          <arg name="name" direction="in" type="s" />
+            <arg name="uuid" direction="out" type="s" />
+        </method>
+        <method name="GetClientNameByUuid">
+          <arg name="uuid" direction="in" type="s" />
+            <arg name="name" direction="out" type="s" />
+        </method>
+        <method name="ReserveClientName">
+          <arg name="name" direction="in" type="s" />
+            <arg name="uuid" direction="in" type="s" />
+        </method>
+        <method name="HasSessionCallback">
+          <arg name="client_name" direction="in" type="s" />
+            <arg name="has_session_callback" direction="out" type="b" />
+        </method>
+        <method name="GetState">
+          <arg name="type" direction="out" type="u" />
+            <arg name="target" direction="out" type="s" />
+        </method>
+        <signal name="StateChanged">
+          <arg name="type" direction="out" type="u" />
+            <arg name="target" direction="out" type="s" />
+        </signal>
+    </interface>
+    <interface name="org.jackaudio.JackTransport" />
+</node>

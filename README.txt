@@ -24,6 +24,15 @@ Where is alsa_in / alsa_out ? (Bridging ALSA 2 JACK)
 I'm new user, doesn't start... Press "config" go to "ALSA Driver" play with "Duplex" clickin your soundcard everywhere
   # TODO: eww, let different soundcards have different configs? is this related?
 
+When Do I need soft mode?
+  There are 2 kinds of xruns in jack, you select soft mode to filter out when jack is late on alsa
+  Thus when you are developing an RT-audio program and don't care about actually dropped audio frames
+
+A2J Bridge doesn't start properly
+  alsa_out sometimes dies right after startup, I did not intercept it's log yet, but seems it's not the only client
+  and it's not a "consistent" "reproducible" behaviour...
+  Pressing the start button multiple times seems to work somehow
+
 Do you really need to manage my asoundrc?
   Unfortunately yes... (tried not to: aplay looks at conf file but doesn't list the pcm)
     (maybe if we split that into many files...)
@@ -33,6 +42,10 @@ Do you really need to manage my asoundrc?
   I have no idea how, but pulseaudio is now working after writing this comment...
   Pulseaudio is  now       working: starts and stops together with jack
                                     (I mean, not the transport, but the server)
+
+Where's the PW2Jack bridge?
+  There is no such a thing available yet (and no app I know about using only native pipewire api)
+
 
 History
 -------
