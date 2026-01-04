@@ -1,5 +1,5 @@
 import pyglet
-pyglet.options['debug_gl_shaders'] = True
+#pyglet.options['debug_gl_shaders'] = True
 from pyglet.window import Window
 from pyglet.text import Label
 from pyglet.gui import TextEntry
@@ -1322,6 +1322,22 @@ def on_draw():
         case _:
             assert False, f'how to draw {navigation.name}?'
 
+def server_status_update(dbus_says_up, gui):
+    if dbus_says_up:
+        server_status_val.text = 'Started'
+    else:
+        server_status_val.text = 'Stopped'
+        try:
+            pid = check_output(['pgrep', '-x', 'jackd'])
+            print('jackd is running without dbus. kill that?', file=stderr)
+            # jackclient may start a jackd when one isn't already running
+            # that is a choice any jack application makes
+            # many jack bindings toggle that on, as that was wanted
+            # especially before jackdbus was a thing
+            server_status_val.text = f'PID: {pid.decode().strip()}'
+            gui.server_not_dbus = True
+        except CalledProcessError:
+            gui.server_not_dbus = False
 
 @window.event
 def on_resize(x, y):
@@ -1358,7 +1374,7 @@ def on_resize(x, y):
 dclients.gui = type('GUI', tuple(), {
     'error_dialog': error_dialog,
     'midid_started_btn': midid_started_btn,
-    'server_status_val': server_status_val,
+    'server_status_update': server_status_update,
     'dsp_status_val': dsp_status_val,
     'xruns_status_val': xruns_status_val,
     'buffer_size_status_val': buffer_size_status_val,
@@ -1372,6 +1388,8 @@ dclients.gui = type('GUI', tuple(), {
     'midid_uniq_btn': midid_uniq_btn,
     'a2jmidid_export_hw_btn': a2jmidid_export_hw_btn,
     'a2jmidid_uniqueness_btn': a2jmidid_uniqueness_btn,
+    # and I managed to put a hack in here too
+    'server_not_dbus': False,
 })
 
 async def initialize_midid():

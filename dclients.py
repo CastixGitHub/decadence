@@ -1,3 +1,4 @@
+# NB: This isn't properly async, it was sync and then hacked up.
 gui = {}
 
 # gdbus introspect -e -d org.jackaudio.service -o /org/jackaudio/Controller
@@ -148,15 +149,10 @@ class Graph:  # TODO: also map IDs and handle port renaming
         return self._server_started
 
     @server_started.setter
-    def server_started(self, true_or_msg):
-        self._server_started = true_or_msg is True
+    def server_started(self, new):
+        self._server_started = new
         if gui:
-            gui.server_status_val.text = (
-                'Started'
-                if true_or_msg is True
-                else (true_or_msg if true_or_msg is not False
-                      else 'Stopped')
-            )
+            gui.server_status_update(new, gui)
 
     @property
     async def graph(self):
@@ -211,6 +207,10 @@ class Graph:  # TODO: also map IDs and handle port renaming
         if client_id:
             try:
                 pid = await diw.jack_pbay.call_get_client_pid(client_id)
+            except DBusError as exc:
+                print(exc, file=stderr)
+                if 'cannot find client' not in str(exc):
+                    raise
             except BaseException as exc:
                 raise
                 assert 'InvalidArgs' in str(exc)
@@ -414,6 +414,9 @@ async def midid_update():
 
 # Such as the main Start button
 async def come_on_start():
+    if gui and gui.server_not_dbus:
+        gui.error_dialog(f'jackd is already running but without dbus!', title='jackd conflict')
+        return
     try:
         await diw.jack_ctrl.call_start_server()
     except DBusError as exc:
@@ -446,7 +449,7 @@ async def now_stop_them():
     except DBusError as exc:
         ...
 
-async def force_restart():
+async def force_restart():  # doesn't restart, TODO: rename to kill_stuff
     await now_stop_them()
     print('stopped')
     try:
@@ -470,12 +473,6 @@ async def force_restart():
         assert 'Message recipient disconnected from message bus without replying' in str(exc)
         ...  # tells didn't answer
         ...  # doesn't tell it anymore...
-    # so we can reconnect
-    # fucc, we can't anymore
-    #GDbus.close()
-    # should we reconnect then?
-    #dbus_reconnect()
-    #await come_on_start()
 
 async def reset_xruns():
     await diw.jack_ctrl.call_reset_xruns()
