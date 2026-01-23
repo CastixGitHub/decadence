@@ -11,7 +11,7 @@ User Guide
 
 When to kill? When as a developer you modified jack, stop/start won't reload your changes
 
-When to Switch Master? I don't know…
+When to Switch Master? When your jack has several drivers and you want to swap them without restarting jack
 
 When to Reset Xruns? when you want to, helps keeping an eye on your load and latency
 
@@ -28,10 +28,15 @@ When Do I need soft mode?
   There are 2 kinds of xruns in jack, you select soft mode to filter out when jack is late on alsa
   Thus when you are developing an RT-audio program and don't care about actually dropped audio frames
 
+What's Self Connect Mode?
+  Self is a jack client, external port is either external to the client or phy.
+  Connections set through dbus just bypass this tricky configuration btw.
+
 A2J Bridge doesn't start properly
   alsa_out sometimes dies right after startup, I did not intercept it's log yet, but seems it's not the only client
   and it's not a "consistent" "reproducible" behaviour...
   Pressing the start button multiple times seems to work somehow
+  Looks like it was pulseaudio alsa plugin somehow to cause this
 
 Do you really need to manage my asoundrc?
   Unfortunately yes... (tried not to: aplay looks at conf file but doesn't list the pcm)
@@ -44,7 +49,7 @@ Do you really need to manage my asoundrc?
                                     (I mean, not the transport, but the server)
 
 Where's the PW2Jack bridge?
-  There is no such a thing available yet (and no app I know about using only native pipewire api)
+  There is no such a thing available yet (and no app I know about using only native pipewire api -- easyeffects)
 
 
 History
@@ -85,4 +90,11 @@ https://gitlab.freedesktop.org/search?group_id=10138&project_id=4753&repository_
 There's one mention about CV through metadata
 I'm not sure if helvum or some other pipewire-specific supports it
 I guess the way to go is carla even on pipewire.
+(Confirmed: CV is through metadata)
 (I need to package carla for gentoo then)
+
+
+Wait a moment...
+https://github.com/gentoo-audio/audio-overlay
+This overlay has carla (and cadence too :3)
+
